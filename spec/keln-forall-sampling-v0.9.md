@@ -257,11 +257,11 @@ evaluate_row(row, logic_expr):
 | `Or(p, q)`              | short-circuit: true if p is true                   |
 | `Implies(p, q)`         | if !p → true (vacuous); else eval q                |
 
-**DoesNotCrash with Bool:** when the forall body is a comparison expression
-that the parser wraps in `DoesNotCrash` (because it cannot distinguish
-`double(n) >= 10` from a "does not crash" expression at parse time), the
-Bool result is used as the logic value. This makes `forall(n: Int) ->
-someCheck(n)` behave as a boolean property check, not just a crash check.
+**DoesNotCrash with Bool:** when the parser produces a `DoesNotCrash`
+wrapping a non-comparison expression that evaluates to `Bool` (e.g.,
+`forall(s: JobState) -> somePredicateCall(s)`), the Bool result is used
+as the logic value rather than treating any non-crash as a pass. This
+makes predicate calls in forall bodies behave as boolean property checks.
 
 ---
 

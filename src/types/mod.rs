@@ -117,50 +117,39 @@ pub struct EffectSet {
 
 impl EffectSet {
     pub fn pure_set() -> Self {
-        let mut effects = BTreeSet::new();
-        effects.insert("Pure".to_string());
-        EffectSet { effects }
+        EffectSet { effects: BTreeSet::new() }
     }
 
     pub fn from_names(names: &[String]) -> Self {
-        let mut effects: BTreeSet<String> = names.iter().cloned().collect();
-        // Normalize: if Pure appears alongside any other effect, drop Pure
-        if effects.len() > 1 {
-            effects.remove("Pure");
-        }
+        let effects: BTreeSet<String> = names.iter()
+            .filter(|n| n.as_str() != "Pure")
+            .cloned()
+            .collect();
         EffectSet { effects }
     }
 
     pub fn is_pure(&self) -> bool {
-        self.effects.len() == 1 && self.effects.contains("Pure")
+        self.effects.is_empty()
     }
 
     /// Check if `self` is a subset of (compatible with) `other`.
-    /// Pure is compatible with everything.
+    /// Pure (empty set) is a subset of every set automatically.
     pub fn is_subset_of(&self, other: &EffectSet) -> bool {
-        if self.is_pure() {
-            return true;
-        }
         self.effects.is_subset(&other.effects)
     }
 
     pub fn union(&self, other: &EffectSet) -> EffectSet {
-        let mut effects = self.effects.clone();
-        for e in &other.effects {
-            if e != "Pure" {
-                effects.insert(e.clone());
-            }
-        }
-        // If we added non-Pure effects, remove Pure
-        if effects.len() > 1 {
-            effects.remove("Pure");
-        }
+        let effects: BTreeSet<String> =
+            self.effects.union(&other.effects).cloned().collect();
         EffectSet { effects }
     }
 }
 
 impl fmt::Display for EffectSet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.effects.is_empty() {
+            return write!(f, "Pure");
+        }
         let names: Vec<&String> = self.effects.iter().collect();
         for (i, n) in names.iter().enumerate() {
             if i > 0 { write!(f, " & ")?; }
