@@ -167,6 +167,48 @@ mod tests {
     }
 
     // =========================================================================
+    // Mock — module method mocking (Clock.now pattern)
+    // =========================================================================
+
+    #[test]
+    fn test_verify_module_mock() {
+        let src = r#"fn getEpoch { IO Unit -> Int
+    in: _
+    out: Clock.now().epoch_ms
+    verify: {
+        mock Clock {
+            now() -> Timestamp { epoch_ms: 1000 }
+        }
+        given(Unit) -> 1000
+    }
+}"#;
+        let mut ex = VerifyExecutor::from_source(src).unwrap();
+        let fd = ex.evaluator.fns.get("getEpoch").cloned().unwrap();
+        let r = ex.verify_fn(&fd);
+        assert!(r.given[0].passed, "module mock test failed: {:?}", r.given[0]);
+    }
+
+    #[test]
+    fn test_verify_module_mock_persists_across_givens() {
+        let src = r#"fn getTwice { IO Unit -> Int
+    in: _
+    out: Clock.now().epoch_ms + Clock.now().epoch_ms
+    verify: {
+        mock Clock {
+            now() -> Timestamp { epoch_ms: 5 }
+        }
+        given(Unit) -> 10
+        given(Unit) -> 10
+    }
+}"#;
+        let mut ex = VerifyExecutor::from_source(src).unwrap();
+        let fd = ex.evaluator.fns.get("getTwice").cloned().unwrap();
+        let r = ex.verify_fn(&fd);
+        assert!(r.given[0].passed, "first given failed: {:?}", r.given[0]);
+        assert!(r.given[1].passed, "second given failed: {:?}", r.given[1]);
+    }
+
+    // =========================================================================
     // VerificationResult JSON
     // =========================================================================
 

@@ -633,7 +633,11 @@ impl Parser {
 
     fn parse_mock_decl(&mut self) -> Result<MockDecl, ParseError> {
         let span = self.expect_keyword("mock")?;
-        let (name, _) = self.expect_lower_ident()?;
+        let tok = self.advance()?;
+        if tok.token_type != TT_WORD {
+            return Err(ParseError::at(&tok, "expected identifier after mock"));
+        }
+        let name = tok.value.clone();
         self.expect_symbol("{")?;
         let mut clauses = vec![];
         while !self.check_symbol("}") {
