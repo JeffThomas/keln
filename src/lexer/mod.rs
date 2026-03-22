@@ -1,6 +1,7 @@
 pub mod comment_matcher;
 pub mod identifier_matcher;
 pub mod string_matcher;
+pub mod symbol_matcher;
 pub mod tokens;
 
 use lexxor::input::InputString;
@@ -8,7 +9,7 @@ use lexxor::matcher::exact::ExactMatcher;
 use lexxor::matcher::float::FloatMatcher;
 use lexxor::matcher::integer::IntegerMatcher;
 use lexxor::matcher::keyword::KeywordMatcher;
-use lexxor::matcher::symbol::SymbolMatcher;
+use self::symbol_matcher::SingleSymbolMatcher;
 use lexxor::matcher::whitespace::WhitespaceMatcher;
 use self::identifier_matcher::IdentifierMatcher;
 use lexxor::token::Token;
@@ -51,7 +52,7 @@ pub fn create_lexer(source: &str) -> Box<dyn Lexxer> {
                 precedence: 0,
                 running: true,
             }),
-            Box::new(SymbolMatcher {
+            Box::new(SingleSymbolMatcher {
                 index: 0,
                 precedence: 0,
                 running: true,

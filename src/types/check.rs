@@ -222,6 +222,17 @@ impl Checker {
         let out_type = self.infer_expr(&fd.out_clause);
         self.check_assignable(&out_type, &sig.output, &fd.span);
 
+        // If the function declares Never return type, validate that the out expression
+        // is a tail call (direct recursion) or a do block ending in a tail call (spec §3.1)
+        if sig.output == Type::Never {
+            if !self.is_valid_never_expr(&fd.out_clause, &fd.name) {
+                self.err(
+                    "function returning Never must end with a tail call to itself (directly or as the final expression of a do block)",
+                    &fd.span,
+                );
+            }
+        }
+
         // Check verify block if present
         if let Some(verify) = &fd.verify {
             for stmt in verify {
@@ -282,10 +293,12 @@ impl Checker {
     fn check_verify_stmt(&mut self, stmt: &ast::VerifyStmt, sig: &FnSig) {
         match stmt {
             ast::VerifyStmt::Given(gc) => {
+                self.env.push_scope();
                 let input_ty = self.infer_expr(&gc.input);
                 self.check_assignable(&input_ty, &sig.input, &gc.span);
                 let expected_ty = self.infer_expr(&gc.expected);
                 self.check_assignable(&expected_ty, &sig.output, &gc.span);
+                self.env.pop_scope();
             }
             ast::VerifyStmt::Mock(_) => {
                 // Mock declarations set up test context; type-checking mock shapes
@@ -595,8 +608,8 @@ impl Checker {
             }
 
             ast::Expr::Select { arms, timeout, span } => {
-                // select is IO
-                if self.current_effects.is_pure() {
+                // select requires IO
+                if !self.current_effects.effects.contains("IO") {
                     self.err("select requires IO effect", span);
                 }
                 let mut arm_types: Vec<Type> = Vec::new();
@@ -625,7 +638,7 @@ impl Checker {
             }
 
             ast::Expr::ChannelSend { channel, value, span } => {
-                if self.current_effects.is_pure() {
+                if !self.current_effects.effects.contains("IO") {
                     self.err("channel send requires IO effect", span);
                 }
                 self.infer_expr(channel);
@@ -634,7 +647,7 @@ impl Checker {
             }
 
             ast::Expr::ChannelRecv(channel, span) => {
-                if self.current_effects.is_pure() {
+                if !self.current_effects.effects.contains("IO") {
                     self.err("channel receive requires IO effect", span);
                 }
                 let chan_ty = self.infer_expr(channel);
@@ -648,7 +661,7 @@ impl Checker {
             }
 
             ast::Expr::ChannelNew { element_type, span } => {
-                if self.current_effects.is_pure() {
+                if !self.current_effects.effects.contains("IO") {
                     self.err("Channel.new requires IO effect", span);
                 }
                 let elem_ty = self.resolve_type_expr(element_type, &[]);
@@ -1006,6 +1019,35 @@ impl Checker {
             return self.types_compatible(a_elem, b_elem);
         }
         false
+    }
+
+    // =========================================================================
+    // Never return type validation (spec §3.1)
+    // =========================================================================
+
+    /// Check that a Never-returning function's out expression is a valid tail call
+    /// (direct self-recursion, or a do block whose final expr is a tail call).
+    fn is_valid_never_expr(&self, expr: &ast::Expr, fn_name: &str) -> bool {
+        match expr {
+            ast::Expr::Call { function, .. } => {
+                self.is_self_call(function, fn_name)
+            }
+            ast::Expr::DoBlock { final_expr, .. } => {
+                self.is_valid_never_expr(final_expr, fn_name)
+            }
+            ast::Expr::Paren(inner, _) => {
+                self.is_valid_never_expr(inner, fn_name)
+            }
+            _ => false,
+        }
+    }
+
+    fn is_self_call(&self, function: &ast::Expr, fn_name: &str) -> bool {
+        match function {
+            ast::Expr::Var(name, _) => name == fn_name,
+            ast::Expr::Paren(inner, _) => self.is_self_call(inner, fn_name),
+            _ => false,
+        }
     }
 
     // =========================================================================

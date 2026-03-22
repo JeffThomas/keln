@@ -123,7 +123,11 @@ impl EffectSet {
     }
 
     pub fn from_names(names: &[String]) -> Self {
-        let effects: BTreeSet<String> = names.iter().cloned().collect();
+        let mut effects: BTreeSet<String> = names.iter().cloned().collect();
+        // Normalize: if Pure appears alongside any other effect, drop Pure
+        if effects.len() > 1 {
+            effects.remove("Pure");
+        }
         EffectSet { effects }
     }
 

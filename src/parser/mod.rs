@@ -1097,6 +1097,15 @@ impl Parser {
                         let tok = self.advance()?;
                         parts.push(tok.value.clone());
                     }
+                    // Channel.new<T>() — special syntax for channel construction
+                    if parts.len() == 2 && parts[0] == "Channel" && parts[1] == "new" && self.check_symbol("<") {
+                        self.advance()?; // consume <
+                        let element_type = self.parse_type_expr()?;
+                        self.expect_symbol(">")?;
+                        self.expect_symbol("(")?;
+                        self.expect_symbol(")")?;
+                        return Ok(Expr::ChannelNew { element_type, span });
+                    }
                     return Ok(Expr::QualifiedName(parts, span));
                 }
                 if self.check_symbol("{") {

@@ -317,4 +317,102 @@ fn bad {
     out: Point { x: 0, y: 0, z: 0 }
 }"#, "unexpected field 'z'");
     }
+
+    // =========================================================================
+    // Fix 1 regression: EffectSet::from_names normalization
+    // =========================================================================
+
+    #[test]
+    fn test_effect_set_pure_io_normalizes() {
+        use crate::types::EffectSet;
+        // from_names(&["Pure", "IO"]) should normalize to just {"IO"}
+        let es = EffectSet::from_names(&["Pure".to_string(), "IO".to_string()]);
+        assert!(!es.is_pure(), "Pure + IO should not be considered pure");
+        assert!(es.effects.contains("IO"));
+        assert!(!es.effects.contains("Pure"), "Pure should be dropped when IO is present");
+    }
+
+    // =========================================================================
+    // Fix 2 regression: select/channel require IO specifically, not just non-Pure
+    // =========================================================================
+
+    #[test]
+    fn test_select_in_log_only_fn_requires_io() {
+        // A function with only Log effect (no IO) should not be able to use select
+        assert_has_error(r#"fn bad {
+    Log Int -> Int
+    in: n
+    out: select {
+        x = <-n -> x
+    }
+}"#, "select requires IO");
+    }
+
+    #[test]
+    fn test_select_in_io_fn_ok() {
+        // A function with IO effect should be able to use select
+        assert_no_errors(r#"fn good {
+    IO Int -> Int
+    in: n
+    out: select {
+        x = <-n -> x
+    }
+}"#);
+    }
+
+    // =========================================================================
+    // Fix 4 regression: Never return type validation
+    // =========================================================================
+
+    #[test]
+    fn test_never_fn_with_tail_call_ok() {
+        assert_no_errors(r#"fn loop1 {
+    IO Int -> Never
+    in: n
+    out: loop1(n)
+}"#);
+    }
+
+    #[test]
+    fn test_never_fn_with_do_block_tail_call_ok() {
+        assert_no_errors(r#"fn loop2 {
+    IO Int -> Never
+    in: n
+    out: do {
+        let x = n + 1
+        loop2(x)
+    }
+}"#);
+    }
+
+    #[test]
+    fn test_never_fn_without_tail_call_error() {
+        assert_has_error(r#"fn bad {
+    Pure Int -> Never
+    in: n
+    out: n + 1
+}"#, "function returning Never must end with a tail call");
+    }
+
+    // =========================================================================
+    // Fix 5 regression: Channel.new<T>() parsing and type checking
+    // =========================================================================
+
+    #[test]
+    fn test_channel_new_parses_and_types() {
+        assert_no_errors(r#"fn makeChannel {
+    IO Unit -> Channel<Int>
+    in: _
+    out: Channel.new<Int>()
+}"#);
+    }
+
+    #[test]
+    fn test_channel_new_requires_io() {
+        assert_has_error(r#"fn bad {
+    Pure Unit -> Channel<Int>
+    in: _
+    out: Channel.new<Int>()
+}"#, "Channel.new requires IO");
+    }
 }
