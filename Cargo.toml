@@ -1,0 +1,21 @@
+[package]
+name = "keln"
+version = "0.1.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "keln"
+path = "src/lib.rs"
+
+[[bin]]
+name = "keln"
+path = "src/main.rs"
+
+[dependencies]
+lexxor    = "0.9.2"
+tokio     = { version = "1", features = ["full"] }
+serde     = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap      = { version = "4", features = ["derive"] }

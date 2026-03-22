@@ -1,0 +1,1205 @@
+-- =============================================================================
+-- Keln Language — Formal EBNF Grammar
+-- Version: 0.9 (aligned with spec v0.9)
+-- =============================================================================
+--
+-- Notation conventions:
+--   <rule>        = non-terminal
+--   "keyword"     = literal terminal (keyword or punctuation)
+--   'c'           = single character terminal
+--   [x]           = x is optional (zero or one)
+--   {x}           = x repeated zero or more times
+--   {x}+          = x repeated one or more times
+--   x | y         = alternation (x or y)
+--   (x)           = grouping
+--   (* comment *) = annotation
+--
+-- Case conventions used in Keln source:
+--   UpperCamelCase  = type names, effect names, variant constructors
+--   lower_snake_case = function names, binding names, field names
+--   UPPER_SNAKE_CASE = reserved for future use
+--
+-- =============================================================================
+
+
+-- =============================================================================
+-- 1. TOP-LEVEL STRUCTURE
+-- =============================================================================
+
+<program>
+    = {<top_level_decl>}
+
+<top_level_decl>
+    = <type_decl>
+    | <fn_decl>
+    | <module_decl>
+    | <trusted_module_decl>
+    | <effect_decl>
+    | <let_binding>
+    | <comment>
+
+
+-- =============================================================================
+-- 2. LEXICAL ELEMENTS
+-- =============================================================================
+
+-- 2.1 Identifiers
+
+<ident>
+    = <lower_start_ident>
+    | <upper_start_ident>
+
+<lower_ident>
+    (* lower_snake_case: function names, binding names, field names *)
+    = <lowercase_letter> {<ident_char>}
+
+<upper_ident>
+    (* UpperCamelCase: type names, variant names, effect names *)
+    = <uppercase_letter> {<ident_char>}
+
+<ident_char>
+    = <letter> | <digit> | '_'
+
+<letter>
+    = <lowercase_letter> | <uppercase_letter>
+
+<lowercase_letter>
+    = 'a' | 'b' | ... | 'z'
+
+<uppercase_letter>
+    = 'A' | 'B' | ... | 'Z'
+
+<digit>
+    = '0' | '1' | ... | '9'
+
+-- 2.2 Literals
+
+<literal>
+    = <int_literal>
+    | <float_literal>
+    | <string_literal>
+    | <bool_literal>
+    | "Unit"
+    | "Never"   (* literal value; also a type *)
+
+<int_literal>
+    = ["-"] {<digit>}+
+
+<float_literal>
+    = ["-"] {<digit>}+ "." {<digit>}+
+
+<string_literal>
+    = '"' {<string_char>} '"'
+
+<string_char>
+    = (* any UTF-8 character except '"' and '\', or escape sequence *)
+      <escape_sequence>
+    | (* any valid UTF-8 char except '"' and '\' *)
+
+<escape_sequence>
+    = '\' ( '"' | '\' | 'n' | 't' | 'r' | 'u' '{' <hex_digit>{4} '}' )
+
+<bool_literal>
+    = "true" | "false"
+
+-- 2.3 Comments
+-- Comments are single-line only. They carry no semantic meaning.
+-- Structured metadata uses `reason:` fields in declarations, not comments.
+
+<comment>
+    = "--" (* any characters to end of line *)
+
+
+-- =============================================================================
+-- 3. TYPE EXPRESSIONS
+-- =============================================================================
+
+<type_expr>
+    = <primitive_type>
+    | <named_type>
+    | <generic_type>
+    | <product_type>       (* anonymous/structural record type *)
+    | <sum_type_ref>       (* reference to a named sum type *)
+    | <function_ref_type>
+    | <never_type>
+
+<primitive_type>
+    = "Int"
+    | "Float"
+    | "Bool"
+    | "String"
+    | "Bytes"
+    | "Unit"
+
+<never_type>
+    = "Never"
+
+<named_type>
+    = <upper_ident>
+    (* references a previously declared type by name *)
+
+<generic_type>
+    = <upper_ident> "<" <type_arg_list> ">"
+
+<type_arg_list>
+    = <type_expr> {"," <type_expr>}
+
+<product_type>
+    (* structural anonymous record type — used inline in signatures *)
+    = "{" <field_type_list> "}"
+
+<field_type_list>
+    = <field_type_decl> {"," <field_type_decl>}
+    | <field_type_decl> {<newline> <field_type_decl>}
+    (* comma-separated or newline-separated *)
+
+<field_type_decl>
+    = <lower_ident> ":" <type_expr> [<refinement_constraint>]
+
+<function_ref_type>
+    = "FunctionRef" "<" <effect_set> "," <type_expr> "," <type_expr> ">"
+
+
+-- =============================================================================
+-- 4. EFFECT EXPRESSIONS
+-- =============================================================================
+
+<effect_set>
+    = "Pure"
+    | <effect_name>
+    | <effect_name> {"&" <effect_name>}+
+
+<effect_name>
+    = "Pure"
+    | "IO"
+    | "Log"
+    | "Metric"
+    | "Clock"
+    | <upper_ident>    (* user-defined custom effect *)
+
+
+-- =============================================================================
+-- 5. TYPE DECLARATIONS
+-- =============================================================================
+
+<type_decl>
+    = "type" <upper_ident> [<type_params>] "=" <type_def>
+
+<type_params>
+    = "<" <upper_ident> {"," <upper_ident>} ">"
+
+<type_def>
+    = <sum_type_def>
+    | <product_type_def>
+    | <refinement_type_def>
+    | <type_alias>
+
+-- 5.1 Sum Type
+
+<sum_type_def>
+    = ["|"] <variant_decl> {"|" <variant_decl>}
+
+<variant_decl>
+    = <upper_ident>                           (* unit variant: no fields *)
+    | <upper_ident> "(" <type_expr> ")"       (* tuple-style single field *)
+    | <upper_ident> <variant_product_type>    (* record-style fields *)
+
+<variant_product_type>
+    = "{" <variant_field_list> "}"
+
+<variant_field_list>
+    = <variant_field_decl> {"," <variant_field_decl>}
+    | <variant_field_decl> {<newline> <variant_field_decl>}
+
+<variant_field_decl>
+    = <lower_ident> ":" <type_expr> [<refinement_constraint>]
+    (* inline refinement on variant fields is explicitly permitted *)
+
+-- 5.2 Product Type (named record)
+
+<product_type_def>
+    = "{" <field_type_list> "}"
+
+-- 5.3 Refinement Type
+
+<refinement_type_def>
+    = <type_expr> "where" <refinement_constraint>
+
+<refinement_constraint>
+    = <range_constraint>
+    | <length_constraint>
+    | <format_constraint>
+    | <comparison_constraint>
+
+<range_constraint>
+    = <number> ".." <number>                  (* inclusive range *)
+    | ">=" <number>
+    | "<=" <number>
+    | ">" <number>
+    | "<" <number>
+    | "==" <number>
+    | "!=" <number>
+
+<length_constraint>
+    = "len" <comparison_op> <int_literal>
+    | "len" "==" <int_literal>
+
+<format_constraint>
+    = "matches" "(" <upper_ident> ")"        (* matches(RFC5322), etc. *)
+
+<comparison_constraint>
+    = <comparison_op> <literal>
+
+<comparison_op>
+    = "==" | "!=" | ">=" | "<=" | ">" | "<"
+
+<number>
+    = <int_literal> | <float_literal>
+
+-- 5.4 Type Alias
+
+<type_alias>
+    = <type_expr>
+
+
+-- =============================================================================
+-- 6. FUNCTION DECLARATIONS
+-- =============================================================================
+
+-- 6.1 Top-level function
+
+<fn_decl>
+    = "fn" <lower_ident> "{" <fn_body> "}"
+
+<fn_body>
+    = <fn_signature>
+      <fn_in_clause>
+      <fn_out_clause>
+      [<fn_confidence_clause>]
+      [<fn_reason_clause>]
+      [<fn_proves_clause>]
+      [<fn_provenance_clause>]
+      [<fn_verify_clause>]
+      [<fn_helpers_clause>]
+
+<fn_signature>
+    = <effect_set> <type_expr> "->" <type_expr>
+
+<fn_in_clause>
+    = "in:" <pattern>
+
+<fn_out_clause>
+    = "out:" <expr>
+
+<fn_confidence_clause>
+    = "confidence:" ( "auto" | <confidence_literal> )
+
+<confidence_literal>
+    = <float_literal>     (* Float where 0.0..1.0 *)
+    | "{" "value:" <float_literal> "," "variance:" <float_literal>
+          "," "sources:" "[" <confidence_source_list> "]"
+          ["," "low_risk_outliers:" "[" <dep_risk_list> "]"]
+      "}"
+
+<confidence_source_list>
+    = {<confidence_source> ","}
+
+<confidence_source>
+    = "ManualOverride" "{" "value:" <float_literal>
+                           "," "reason:" <string_literal> "}"
+    | "VerifyCoverage" "{" "score:" <float_literal>
+                           "," "cases:" <int_literal>
+                           "," "gaps:" <int_literal> "}"
+    | "TrustedBoundary" "{" "module:" <upper_ident> "}"
+    (* other sources populated by toolchain; not author-specified *)
+
+<dep_risk_list>
+    = (* list of DependencyRisk values; toolchain-populated *)
+
+<fn_reason_clause>
+    = "reason:" <string_literal>
+
+-- 6.2 Proves block (advisory postconditions)
+
+<fn_proves_clause>
+    = "proves:" "{" <property_list> "}"
+
+<property_list>
+    = {<property_expr>}
+
+<property_expr>
+    = <logic_expr>   (* see section 11 for forall/proves logic operators *)
+
+-- 6.3 Provenance block
+
+<fn_provenance_clause>
+    = "provenance:" "{" <provenance_field_list> "}"
+
+<provenance_field_list>
+    = "description:" <string_literal>
+      ["pattern_id:" <string_literal>]
+      ["version:" <int_literal>]
+      ["source:" <pattern_source>]
+      ["uses:" <int_literal>]
+      ["failures:" <int_literal>]
+      ["failure_ref:" "[" {<string_literal> ","} "]"]
+
+<pattern_source>
+    = "PatternSource.Verified"
+    | "PatternSource.Unverified"
+    | "PatternSource.Experimental"
+
+-- 6.4 Verify block
+
+<fn_verify_clause>
+    = "verify:" "{" <verify_stmt_list> "}"
+
+<verify_stmt_list>
+    = {<verify_stmt>}
+
+<verify_stmt>
+    = <mock_decl>
+    | <given_case>
+    | <forall_property>
+
+<mock_decl>
+    = "mock" <lower_ident> "{" <mock_clause_list> "}"    (* module/effect mock *)
+    | "mock" <lower_ident> "{" <fn_mock_clause_list> "}" (* FunctionRef mock *)
+
+<mock_clause_list>
+    (* module mock: method call patterns *)
+    = {<mock_method_clause>}
+
+<mock_method_clause>
+    = <lower_ident> "(" <mock_pattern_list> ")" "->" <expr>
+
+<mock_pattern_list>
+    = <mock_pattern> {"," <mock_pattern>}
+
+<mock_pattern>
+    = "_"            (* wildcard: match anything *)
+    | <pattern>      (* specific pattern match *)
+
+<fn_mock_clause_list>
+    (* FunctionRef mock: call patterns *)
+    = {<fn_mock_clause>}
+
+<fn_mock_clause>
+    = "call" "(" <mock_pattern> ")" "->" <expr>
+    (* first matching clause wins; '_' catch-all must be last *)
+
+<given_case>
+    = "given" "(" <expr> ")" "->" <expr>
+
+<forall_property>
+    = "forall" "(" <forall_binding_list> ")" "->"
+      ( <logic_expr> | <expr> )
+    (* when expr has no comparison operator, property is "does not crash" *)
+
+<forall_binding_list>
+    = <forall_binding> {"," <forall_binding>}
+
+<forall_binding>
+    = <lower_ident> ":" <type_expr> [<refinement_constraint>]
+
+-- 6.5 Helpers block
+
+<fn_helpers_clause>
+    = "helpers:" "{" <helper_decl_list> "}"
+
+<helper_decl_list>
+    = {<helper_decl>}
+
+<helper_decl>
+    = <compact_helper>
+    | <full_helper>
+
+<compact_helper>
+    = <lower_ident> "::" <effect_set> <type_expr> "->" <type_expr>
+      "=>" <expr>
+      [<newline> "promote:" "threshold" "(" <int_literal> ")"]
+    (* single expression; auto confidence; no verify block *)
+
+<full_helper>
+    = "fn" <lower_ident> "{" <fn_body> "}"
+    (* complete function declaration; may include verify, confidence, etc. *)
+
+
+-- =============================================================================
+-- 7. LET BINDINGS
+-- =============================================================================
+
+<let_binding>
+    = "let" <pattern> "=" <expr>
+    | "let" <lower_ident> ":" <type_expr> "=" <expr>
+
+(* Multi-binding for clone fan-out *)
+<multi_let_binding>
+    = "let" <lower_ident> "," <lower_ident> "=" "clone" "(" <expr> ")"
+
+
+-- =============================================================================
+-- 8. EXPRESSIONS
+-- =============================================================================
+
+<expr>
+    = <literal>
+    | <lower_ident>                          (* variable reference *)
+    | <upper_ident>                          (* type constructor / module name *)
+    | <qualified_name>                       (* Module.function or Type.Variant *)
+    | <call_expr>
+    | <pipeline_expr>
+    | <match_expr>
+    | <record_expr>
+    | <list_expr>
+    | <do_block>
+    | <select_expr>
+    | <channel_send>
+    | <channel_recv>
+    | <clone_expr>
+    | <with_expr>
+    | <channel_new_expr>
+    | <let_in_expr>
+    | <wildcard>
+    | "(" <expr> ")"
+
+<wildcard>
+    = "_"
+
+-- 8.1 Qualified names
+
+<qualified_name>
+    = <upper_ident> {"." (<lower_ident> | <upper_ident>)}+
+    (* e.g. Result.ok, JobError.Timeout, String.trim, PatternSource.Verified *)
+
+-- 8.2 Function call
+
+<call_expr>
+    = <callable_expr> "(" [<arg_list>] ")"
+    | <callable_expr> <record_expr>           (* record argument syntax *)
+
+<callable_expr>
+    = <lower_ident>
+    | <qualified_name>
+
+<arg_list>
+    = <arg> {"," <arg>}
+
+<arg>
+    = <expr>
+    | <lower_ident> ":" <expr>    (* named argument *)
+
+-- 8.3 Pipeline
+
+<pipeline_expr>
+    = <expr> {"|>" <callable_expr>}+
+    (* each step: expr is input; callable_expr is named function reference *)
+    (* pipelines evaluate strictly left to right *)
+
+-- 8.4 Match expression
+
+<match_expr>
+    = "match" <expr> "{" <match_arm_list> "}"
+
+<match_arm_list>
+    = <match_arm> {<match_arm>}+
+    (* must be exhaustive; compiler error if cases are missing *)
+
+<match_arm>
+    = <pattern> "->" <expr>
+    | <pattern> "->" <do_block>
+
+-- 8.5 Record construction
+
+<record_expr>
+    = "{" <field_value_list> "}"
+    | <upper_ident> "{" <field_value_list> "}"    (* named record construction *)
+    | <variant_ctor>                              (* unit variant *)
+    | <variant_ctor> "(" <expr> ")"               (* tuple variant *)
+    | <variant_ctor> "{" <field_value_list> "}"   (* record variant *)
+
+<variant_ctor>
+    = <upper_ident>
+    | <qualified_name>    (* e.g. JobError.Timeout, Result.Ok *)
+
+<field_value_list>
+    = <field_value> {"," <field_value>}
+    | <field_value> {<newline> <field_value>}
+
+<field_value>
+    = <lower_ident> ":" <expr>
+
+-- 8.6 List construction
+
+<list_expr>
+    = "[" [<expr_list>] "]"
+
+<expr_list>
+    = <expr> {"," <expr>}
+
+-- 8.7 Do block
+
+<do_block>
+    = "do" "{" <do_stmt_list> "}"
+
+<do_stmt_list>
+    = {<do_stmt_unit>} <expr>
+    (* all statements except the last must have type Unit — compiler enforced *)
+    (* final expression is the result of the do block *)
+    (* a do block whose final expression has type Never has type Never *)
+
+<do_stmt_unit>
+    = <expr> <newline>           (* must evaluate to Unit *)
+    | <let_binding> <newline>
+    | <multi_let_binding> <newline>
+    | <channel_send> <newline>
+
+-- 8.8 Select expression
+
+<select_expr>
+    = "select" "{" <select_arm_list> [<timeout_arm>] "}"
+
+<select_arm_list>
+    = {<select_arm>}+
+
+<select_arm>
+    = <lower_ident> "=" <channel_recv> "->" <expr>
+    | "_" "=" <channel_recv> "->" <expr>
+    (* non-deterministic: whichever channel is ready first wins *)
+
+<timeout_arm>
+    = "timeout" "(" <duration_expr> ")" "->" <expr>
+
+<duration_expr>
+    = <int_literal> "ms"
+    | <int_literal> "s"
+    | <expr>    (* any expr of type Duration *)
+
+-- 8.9 Channel operations
+
+<channel_send>
+    = <expr> "<-" <expr>
+    (* left expr: channel binding; right expr: value to send *)
+    (* sends transfer ownership; sender binding is invalidated *)
+
+<channel_recv>
+    = "<-" <expr>
+    (* expr must have type Channel<T>; result has type T *)
+    (* blocks until a value is available *)
+
+<channel_new_expr>
+    = "Channel" "." "new" "<" <type_expr> ">" "(" ")"
+    (* empty parentheses required; Channel.new<T> without () is a type reference *)
+
+-- 8.10 Clone expression
+
+<clone_expr>
+    = "clone" "(" <expr> ")"
+    (* produces two independent owned values: used as multi_let_binding *)
+
+-- 8.11 Partial application (.with)
+
+<with_expr>
+    = <lower_ident> "." "with" "(" <lower_ident> ":" <expr> ")"
+    (* named form: bind one parameter *)
+    | <lower_ident> "." "with" "(" <record_expr> ")"
+    (* record form: bind multiple parameters at once; preferred for 3+ params *)
+    | <qualified_name> "." "with" "(" <lower_ident> ":" <expr> ")"
+    | <qualified_name> "." "with" "(" <record_expr> ")"
+
+-- 8.12 Let-in expression (inside do blocks and match arms)
+
+<let_in_expr>
+    = "let" <pattern> "=" <expr>
+    (* binds within the enclosing do block or match arm scope *)
+    | "let" <lower_ident> ":" <type_expr> "=" <expr>
+
+
+-- =============================================================================
+-- 9. PATTERNS
+-- =============================================================================
+
+<pattern>
+    = "_"                                          (* wildcard: matches anything *)
+    | <lower_ident>                                (* binding: binds the value *)
+    | <literal>                                    (* literal: exact match *)
+    | <upper_ident>                                (* unit variant match *)
+    | <upper_ident> "(" <pattern> ")"              (* tuple variant destructure *)
+    | <upper_ident> "{" <field_pattern_list> "}"   (* record variant destructure *)
+    | "{" <field_pattern_list> "}"                 (* anonymous record destructure *)
+    | "[" [<pattern_list>] "]"                     (* list pattern *)
+    | "Ok" "(" <pattern> ")"                       (* Result Ok *)
+    | "Err" "(" <pattern> ")"                      (* Result Err *)
+    | "Some" "(" <pattern> ")"                     (* Maybe Some *)
+    | "None"                                       (* Maybe None *)
+
+<field_pattern_list>
+    = <field_pattern> {"," <field_pattern>}
+
+<field_pattern>
+    = <lower_ident> ":" <pattern>    (* field: pattern *)
+    | <lower_ident>                  (* shorthand: binds field to same name *)
+    | "_"                            (* ignore field *)
+
+<pattern_list>
+    = <pattern> {"," <pattern>}
+
+
+-- =============================================================================
+-- 10. MODULE DECLARATIONS
+-- =============================================================================
+
+<module_decl>
+    = "module" <upper_ident> "{" <module_body> "}"
+
+<trusted_module_decl>
+    = "trusted" "module" <upper_ident> "{" <trusted_module_body> "}"
+
+<module_body>
+    = ["requires:" "{" <module_requires_list> "}"]
+      "provides:" "{" <module_provides_list> "}"
+
+<trusted_module_body>
+    = "provides:" "{" <module_provides_list> "}"
+      "reason:" <string_literal>
+
+<module_requires_list>
+    = <field_type_decl> {<newline> <field_type_decl>}
+    (* field: type [where constraint] *)
+
+<module_provides_list>
+    = <module_fn_sig_decl> {<newline> <module_fn_sig_decl>}
+
+<module_fn_sig_decl>
+    = <lower_ident> ":" <effect_set> <type_expr> "->" <type_expr>
+    (* name: effects Input -> Output *)
+    (* structural type on Input is permitted *)
+
+
+-- =============================================================================
+-- 11. EFFECT DECLARATIONS
+-- =============================================================================
+
+<effect_decl>
+    = "effect" <upper_ident> "{" <module_provides_list> "}"
+    (* same structure as module provides: named fn signatures *)
+
+
+-- =============================================================================
+-- 12. LOGIC EXPRESSIONS (forall / proves scope only)
+-- =============================================================================
+
+-- These operators are valid only within <forall_property> and <fn_proves_clause>.
+-- They are NOT valid in general <expr> contexts.
+-- The compiler enforces this scope restriction.
+
+<logic_expr>
+    = <comparison_expr>
+    | "not" "(" <logic_expr> ")"
+    | "and" "(" <logic_expr> "," <logic_expr> ")"
+    | "or"  "(" <logic_expr> "," <logic_expr> ")"
+    | "implies" "(" <logic_expr> "," <logic_expr> ")"
+    (* implies(p, q): if p is false, returns true immediately (short-circuit) *)
+
+<comparison_expr>
+    = <expr> <comparison_op> <expr>
+    | <expr>    (* "does not crash" form: no comparison; verifier checks completion *)
+
+-- Operator precedence within logic_expr (applied only in property contexts):
+-- not > and > or > implies (outermost)
+-- Parentheses are required to disambiguate; the grammar above already requires
+-- explicit parentheses for all logical operators, so precedence is moot.
+
+
+-- =============================================================================
+-- 13. ARITHMETIC AND COMPARISON OPERATORS (general expressions)
+-- =============================================================================
+
+-- These operators are valid in general expression contexts.
+-- Arithmetic operators are fixed — no operator overloading.
+-- + always means Int addition. * always means Int multiplication. etc.
+
+<arith_expr>
+    = <expr> "+" <expr>      (* Int addition *)
+    | <expr> "-" <expr>      (* Int subtraction *)
+    | <expr> "*" <expr>      (* Int multiplication *)
+    | <expr> "/" <expr>      (* Int division; result is Int (truncated) *)
+
+-- Float arithmetic uses stdlib functions: Float.add, Float.multiply, etc.
+-- There are no Float arithmetic operators in the language.
+-- This prevents operator ambiguity between Int and Float arithmetic.
+
+<comparison_expr_general>
+    = <expr> "==" <expr>     (* structural equality; requires Eq on both types *)
+    | <expr> "!=" <expr>     (* structural inequality; defined as not(==) *)
+    | <expr> "<"  <expr>     (* Int comparison *)
+    | <expr> "<=" <expr>     (* Int comparison *)
+    | <expr> ">"  <expr>     (* Int comparison *)
+    | <expr> ">=" <expr>     (* Int comparison *)
+
+-- Note: comparison operators are defined for Int. For Float, use Float.compare.
+-- For Timestamp, use Timestamp.gte, Timestamp.lte, etc.
+-- For Duration, use Duration comparison via Int comparison on .milliseconds field.
+
+
+-- =============================================================================
+-- 14. FIELD ACCESS
+-- =============================================================================
+
+<field_access>
+    = <lower_ident> "." <lower_ident>          (* record field access *)
+    | <call_expr> "." <lower_ident>             (* chained access *)
+
+-- Field access is valid on:
+--   - product type values (records): always valid
+--   - sum type values: COMPILE ERROR — requires explicit match first
+--     (sum type field access without prior match binding is a compile error)
+-- Accessor functions returning Maybe<T> are the idiomatic pattern for
+-- repeated field access across sum type variants.
+
+
+-- =============================================================================
+-- 15. COMPLETE FUNCTION DECLARATION EXAMPLE
+-- =============================================================================
+--
+-- The following example demonstrates how all grammar elements compose
+-- into a complete function declaration. This is not grammar — it is
+-- a reference illustration.
+--
+-- fn failJob {
+--     Clock {
+--         state:  JobState
+--         error:  JobError
+--         policy: RetryPolicy
+--     } -> Result<JobState, RetryError>
+--
+--     in: input
+--
+--     out: match input.state {
+--         Running(r) ->
+--             match r.attempt < input.policy.max_attempts {
+--                 true ->
+--                     do {
+--                         let next_attempt = r.attempt + 1
+--                         let delay = computeBackoff({
+--                             policy:  input.policy
+--                             attempt: next_attempt
+--                         })
+--                         Result.ok(Retrying {
+--                             job_id:      r.job_id
+--                             payload:     r.payload
+--                             attempt:     next_attempt
+--                             retry_after: Timestamp.add(Clock.now(), delay)
+--                         })
+--                     }
+--                 false ->
+--                     Result.ok(DeadLetter {
+--                         job_id:      r.job_id
+--                         payload:     r.payload
+--                         final_error: input.error
+--                         attempts:    r.attempt
+--                         dead_at:     Clock.now()
+--                     })
+--             }
+--         _ ->
+--             Result.err(RetryError.RetryNotScheduled {
+--                 state: stateTagOf(input.state)
+--             })
+--     }
+--
+--     confidence: auto
+--
+--     verify: {
+--         mock Clock { now() -> Timestamp { epoch_ms: 1000 } }
+--
+--         given({
+--             state: Running { job_id: "j1", payload: Bytes.empty(),
+--                              started_at: Timestamp { epoch_ms: 0 },
+--                              attempt: 1, worker_id: "w1",
+--                              lease_until: Timestamp { epoch_ms: 5000 } },
+--             error:  JobError.ExecutionFailed { message: "fail" },
+--             policy: { max_attempts: 3, base_delay: Duration.seconds(1),
+--                       multiplier: 2.0 }
+--         }) ->
+--             Ok(Retrying { job_id: "j1", payload: Bytes.empty(),
+--                           attempt: 2,
+--                           retry_after: Timestamp { epoch_ms: 2000 } })
+--
+--         forall(p: RetryPolicy, s: JobState) ->
+--             implies(
+--                 isRunning(s),
+--                 match failJob({ state: s,
+--                                 error: JobError.ExecutionFailed { message: "x" },
+--                                 policy: p }) {
+--                     Ok(Retrying(r)) ->
+--                         r.retry_after.epoch_ms >= Clock.now().epoch_ms
+--                     _ -> true
+--                 }
+--             )
+--     }
+--
+--     helpers: {
+--         isRunning :: Pure JobState -> Bool =>
+--             match s { Running(_) -> true; _ -> false }
+--     }
+-- }
+
+
+-- =============================================================================
+-- 16. GRAMMAR NOTES AND CONSTRAINTS NOT EXPRESSIBLE IN EBNF
+-- =============================================================================
+--
+-- The following constraints are enforced by the compiler but cannot be
+-- expressed in EBNF. They are semantic constraints, not syntactic ones.
+--
+-- N1. EXHAUSTIVE MATCH
+--     All match expressions must cover all variants of the matched type.
+--     Non-exhaustive match is a compile error.
+--
+-- N2. EFFECT COMPATIBILITY
+--     A function with effect set E may only call functions whose effect
+--     set is a subset of E (after Pure ⊆ E rule). Violation is a compile error.
+--
+-- N3. OWNERSHIP
+--     After a channel send (<-), the sent binding is invalidated.
+--     Any subsequent reference to an invalidated binding is a compile error.
+--     clone() produces two independent bindings; both are valid after cloning.
+--
+-- N4. SUM TYPE FIELD ACCESS
+--     Dot-access on a value of sum type without a prior match binding is
+--     a compile error. Access is only valid on the inner record after
+--     destructuring via match.
+--
+-- N5. DO BLOCK UNIT ENFORCEMENT
+--     All non-final expressions in a do block must have type Unit.
+--     A non-final expression returning a non-Unit type is a compile error.
+--
+-- N6. NEVER RETURN TYPE
+--     A function declaring return type Never must have its out expression
+--     either: (a) be a direct tail call to itself or another Never-typed
+--     function, or (b) be a do block whose final expression is such a call.
+--     Violation is a compile error.
+--
+-- N7. FORALL LOGIC OPERATORS SCOPE
+--     not(), and(), or(), implies() are valid only within forall_property
+--     and fn_proves_clause. Using them in general out expressions is a
+--     compile error.
+--
+-- N8. MOCK PARAMETER NAMES
+--     mock <name> { ... } must reference a parameter name that appears in
+--     the function's in: binding. The mock's return type must match the
+--     declared return type of the FunctionRef or module method. Violation
+--     is a compile error.
+--
+-- N9. COMPACT HELPER BINDING
+--     In compact helper form (name :: effects In -> Out => expr), the
+--     input is bound to the lowercase first letter of the type name by
+--     convention, but any valid identifier is accepted. The compiler does
+--     not enforce a naming convention.
+--
+-- N10. INLINE REFINEMENT CHECKING
+--      Refinement constraints on variant fields (e.g. attempt: Int where >= 1)
+--      are checked at construction time. Constructing a variant with a field
+--      value that violates its refinement is a compile error when statically
+--      detectable, or a runtime Result::Err when the value is dynamic.
+--
+-- N11. CLONEABLE CONSTRAINT
+--      clone(expr) is only valid when the type of expr satisfies the Cloneable
+--      constraint (compiler-derived). Attempting to clone a non-Cloneable type
+--      is a compile error identifying the specific field or variant that breaks
+--      the constraint.
+--
+-- N12. FORALL PRODUCT TYPE SAMPLING
+--      For forall bindings over product types, the verifier uses per-dimension
+--      stratified sampling rather than cross-product enumeration. This is a
+--      runtime semantics note, not a syntactic constraint.
+--
+-- N13. TAIL CALL DETECTION
+--      The VM implements TCO for direct tail calls: the final expression in
+--      a function's out or do block is a call to the same function.
+--      Indirect tail calls (via another function) do not receive TCO.
+
+
+-- =============================================================================
+-- 17. KEYWORD RESERVATION
+-- =============================================================================
+
+<reserved_keyword>
+    = "fn"       | "type"     | "module"  | "trusted"
+    | "effect"   | "let"      | "in"      | "out"
+    | "match"    | "do"       | "select"  | "timeout"
+    | "clone"    | "spawn"    (* Task.spawn — reserved as expression context *)
+    | "verify"   | "given"    | "forall"  | "mock"     | "call"
+    | "helpers"  | "promote"  | "threshold"
+    | "confidence" | "reason" | "proves"  | "provenance"
+    | "where"    | "auto"
+    | "Pure"     | "IO"       | "Log"     | "Metric"   | "Clock"
+    | "true"     | "false"    | "Unit"    | "Never"
+    | "not"      | "and"      | "or"      | "implies"
+    (* not/and/or/implies are reserved globally; scope enforcement is semantic *)
+
+-- Upper-case keywords that are also type names:
+<reserved_type_name>
+    = "Int"    | "Float"  | "Bool"   | "String" | "Bytes"
+    | "Unit"   | "Never"  | "List"   | "Map"    | "Set"
+    | "Channel"| "Maybe"  | "Result" | "Task"   | "Ordering"
+    | "FunctionRef"
+
+
+-- =============================================================================
+-- 18. WHITESPACE AND LAYOUT
+-- =============================================================================
+
+-- Keln uses a combination of explicit delimiters ({}, [], ()) and newlines
+-- as statement separators. The grammar is not whitespace-sensitive in the
+-- Python sense — curly braces delimit all blocks. However, newlines serve
+-- as implicit separators for field lists and do block statements.
+
+-- Explicit delimiters:
+--   {}  enclose: fn bodies, type definitions, record expressions, match arms,
+--               do blocks, select blocks, verify blocks, helpers blocks,
+--               module bodies, effect bodies, proves/provenance blocks
+--   []  enclose: list expressions
+--   ()  enclose: grouped expressions, function arguments, forall bindings,
+--               clone, with, mock call patterns
+
+-- Whitespace:
+--   Spaces and tabs are insignificant except as token separators.
+--   Newlines serve as implicit commas in field lists and do block statements.
+--   Explicit commas and newlines are interchangeable in field_value_list,
+--   field_type_list, and variant_field_list.
+--   Indentation carries no semantic meaning.
+
+<newline>
+    = '\n' | '\r' '\n'
+
+<whitespace>
+    = ' ' | '\t' | <newline>
+    (* whitespace is ignored except as token separator *)
+
+
+-- =============================================================================
+-- 19. OPERATOR PRECEDENCE AND ASSOCIATIVITY
+-- =============================================================================
+--
+-- This section is required for unambiguous parsing. Without explicit precedence
+-- rules, the interactions between pipelines, match expressions, do blocks,
+-- .with binding, and arithmetic operators are ambiguous.
+--
+-- Precedence levels (higher number = binds tighter):
+--
+-- Level 1  (loosest)  Pipeline         |>         left-associative
+-- Level 2             Comparison       == != < <= > >=  non-associative
+-- Level 3             Addition         + -        left-associative
+-- Level 4             Multiplication   * /        left-associative
+-- Level 5             Field access     .          left-associative
+-- Level 6             Function call    f(...)     left-associative
+-- Level 7  (tightest) .with binding    .with(...)  left-associative
+--
+-- Structural expressions (match, do, select) are TERMINAL — they do not
+-- participate in infix precedence. They must be wrapped in parentheses
+-- if used as the left-hand side of a pipeline or as a function argument.
+-- They may appear freely as:
+--   - the entire out: expression of a function
+--   - the right-hand side of a match arm
+--   - the body of a do block statement
+--   - the right-hand side of a let binding
+--
+-- KEY RULES:
+--
+-- Rule P1: PIPELINE TERMINATES AT STATEMENT BOUNDARY
+--   A pipeline x |> f |> g is parsed left-to-right and terminates at:
+--   - end of the out: clause (newline + next declaration keyword)
+--   - closing } of a do block, match arm, or select arm
+--   - explicit comma in an argument list
+--   The pipeline does NOT consume into a following match expression.
+--   To pipeline into a match, use a named function reference:
+--     CORRECT:   value |> classifyValue    (classifyValue contains the match)
+--     INCORRECT: value |> match { ... }    (match is not a callable reference)
+--
+-- Rule P2: MATCH IS A TERMINAL EXPRESSION
+--   match expr { ... } is a self-contained terminal expression.
+--   It cannot appear as the left operand of |>, +, -, *, /, ==, etc.
+--   It can appear as:
+--     - the result of a match arm:   pattern -> match inner { ... }
+--     - the result of a do block:    do { ...; match x { ... } }
+--     - the argument to a call:      fn(match x { ... })
+--     - a let binding:               let y = match x { ... }
+--
+-- Rule P3: DO BLOCK BOUNDARY
+--   A do block { stmt; stmt; expr } is delimited entirely by its braces.
+--   The final expression inside the do block is determined by the last
+--   expression before the closing }. There is no ambiguity about where
+--   the do block ends because braces are explicit delimiters.
+--   A do block may appear anywhere a terminal expression is valid (see Rule P2).
+--
+-- Rule P4: .with BINDS TIGHTEST
+--   f.with(x: v) binds tighter than any operator.
+--   f.with(x: v) |> g is parsed as (f.with(x: v)) |> g
+--   f.with(x: v)(arg) is a call on the partial application result
+--   .with may be chained: f.with(a: x).with(b: y)
+--   Each .with application produces a new FunctionRef.
+--
+-- Rule P5: FIELD ACCESS BEFORE CALLS
+--   r.field(args) is parsed as (r.field)(args) — field access, then call.
+--   This is the natural reading: select the method, then apply it.
+--
+-- Rule P6: COMPARISON IS NON-ASSOCIATIVE
+--   a == b == c is a compile error — must be written as
+--   and(a == b, b == c) within forall/proves, or as two separate comparisons.
+--   This prevents accidental chained comparisons.
+--
+-- Rule P7: ARITHMETIC LEFT-ASSOCIATIVITY
+--   a + b + c is parsed as (a + b) + c
+--   a * b + c is parsed as (a * b) + c  (multiplication binds tighter)
+--
+-- DISAMBIGUATION EXAMPLES:
+--
+-- Example 1: Pipeline with nested match result
+--   out: req.body |> parseBody |> Result.bind(executeGraphQL)
+--   Parsed as: ((req.body) |> parseBody) |> Result.bind(executeGraphQL)
+--   NOT: req.body |> (parseBody |> Result.bind(executeGraphQL))
+--   Pipelines are left-associative.
+--
+-- Example 2: Match in pipeline position
+--   -- ILLEGAL: match cannot be a pipeline step directly
+--   out: req |> match { ... }              -- COMPILE ERROR
+--   -- LEGAL: match as full out expression
+--   out: match req.method { GET -> ...; POST -> ... }
+--   -- LEGAL: match result used in pipeline via named function
+--   out: req |> routeRequest               -- routeRequest contains the match
+--
+-- Example 3: .with in pipeline
+--   out: ids |> List.map(fetchUser.with(db: myDb))
+--   Parsed as: ids |> List.map((fetchUser.with(db: myDb)))
+--   .with binds to fetchUser before List.map receives the FunctionRef.
+--
+-- Example 4: Arithmetic in record construction
+--   out: Retrying { attempt: r.attempt + 1, ... }
+--   Parsed as: Retrying { attempt: (r.attempt + 1), ... }
+--   + binds tighter than record field value boundary (,).
+--
+-- Example 5: do block as match arm result
+--   match condition {
+--       true  -> do { Clock.sleep(d); Result.err(e) }
+--       false -> Result.ok(x)
+--   }
+--   The do block is a terminal expression; it does not extend past the
+--   closing }. The match arm ends at the do block's closing }.
+--
+-- Example 6: Pipeline precedence over comparison
+--   value |> transform == expected
+--   Parsed as: (value |> transform) == expected
+--   Pipeline (level 1) is looser than comparison (level 2)?
+--   NO — this is a compile error. Pipeline result cannot be compared
+--   inline without parentheses:
+--   CORRECT: (value |> transform) == expected    -- valid in forall/proves
+--   RATIONALE: A pipeline as the left side of == is almost always a mistake
+--   in Keln since pipelines produce values that should be matched, not compared
+--   inline. The compile error forces explicitness.
+--   EXCEPTION: In forall property expressions, (value |> transform) == expected
+--   is valid with explicit parentheses around the pipeline.
+--
+-- SUMMARY TABLE:
+--
+-- Construct          | Position in grammar     | Can be LHS of |> ? | Can be in arg?
+-- -------------------|-------------------------|---------------------|---------------
+-- match expr { }     | terminal expression     | NO                  | YES (parenthesized or direct)
+-- do { }             | terminal expression     | NO                  | YES
+-- select { }         | terminal expression     | NO                  | YES
+-- f(args)            | call_expr               | YES                 | YES
+-- f.with(k: v)       | with_expr               | YES (tightest)      | YES
+-- r.field            | field_access            | YES                 | YES
+-- a + b              | arith_expr              | YES (level 3-4)     | YES
+-- a == b             | comparison_expr_general | NO (non-assoc)      | YES
+-- a |> f |> g        | pipeline_expr           | YES (left-assoc)    | YES (parenthesized)
+
+
+-- =============================================================================
+-- 20. TRUSTED MODULE FUZZ BLOCK
+-- =============================================================================
+--
+-- trusted modules declare a fuzz block specifying what properties the
+-- underlying Rust implementation must satisfy when fed arbitrary inputs.
+-- The fuzz block is checked by the Phase 3 fuzzing harness, not the
+-- Keln verifier. It integrates into VerificationResult as fuzz_status.
+
+<trusted_module_decl>
+    (* extends the definition in section 10 *)
+    = "trusted" "module" <upper_ident> "{" <trusted_module_body_v2> "}"
+
+<trusted_module_body_v2>
+    = "provides:" "{" <module_provides_list> "}"
+      "reason:" <string_literal>
+      ["fuzz:" "{" <fuzz_decl_list> "}"]
+
+<fuzz_decl_list>
+    = {<fuzz_decl>}
+
+<fuzz_decl>
+    = <lower_ident> ":" <fuzz_inputs> "->" <fuzz_invariant>
+    (* lower_ident matches a function name in the provides block *)
+
+<fuzz_inputs>
+    = "inputs" "(" <type_expr> {"," <type_expr>} ")"
+    (* the input types to generate random values for *)
+    (* the fuzzer uses stratified sampling from the forall system *)
+
+<fuzz_invariant>
+    = "crashes_never"
+    (* the implementation must not panic, segfault, or produce UB
+       on any input of the declared types *)
+    | "returns_result"
+    (* the implementation must return a Result<T, E> value for all inputs;
+       it may return Err but must not crash *)
+    | "deterministic"
+    (* the implementation must return identical output for identical input;
+       used for pure functions like JSON.serialize *)
+
+-- Example:
+--
+-- trusted module JSON {
+--     provides: {
+--         parse:     Pure Bytes, TypeRef -> Result<TypeRef, ParseError>
+--         serialize: Pure T              -> Bytes
+--     }
+--     reason: "correctness guaranteed by external test suite and fuzzing"
+--     fuzz: {
+--         parse:     inputs(Bytes) -> returns_result
+--         serialize: inputs(T)     -> crashes_never
+--     }
+-- }
+--
+-- trusted module HttpServer {
+--     provides: {
+--         start: IO { port: Port, router: Router } -> Result<Unit, HttpError>
+--     }
+--     reason: "HTTP stack; correctness guaranteed by integration tests"
+--     fuzz: {
+--         start: inputs({ port: Port, router: Router }) -> returns_result
+--     }
+-- }
+--
+-- The fuzz block is optional. A trusted module without a fuzz block is legal
+-- but the toolchain emits a FuzzCoverageWarning in VerificationResult,
+-- signalling that the trusted boundary has no automated safety net.
+-- FuzzCoverageWarning does not affect is_clean.
+
+-- Updated VerificationResult to include fuzz status:
+-- (This is a grammar annotation, not a type declaration)
+--
+-- type VerificationResult = {
+--     ...                                           (* existing fields *)
+--     fuzz_status: List<FuzzResult>                 (* new in v0.9 *)
+-- }
+--
+-- type FuzzResult =
+--     | FuzzPassed   { module: ModuleName, fn_name: FunctionName,
+--                      iterations: Int, invariant: FuzzInvariant }
+--     | FuzzFailed   { module: ModuleName, fn_name: FunctionName,
+--                      input: Value, violation: FuzzInvariant }
+--     | FuzzNotDeclared { module: ModuleName }    (* trusted module, no fuzz block *)
+
+-- Fuzz keyword reservation:
+-- "fuzz" | "inputs" | "crashes_never" | "returns_result" | "deterministic"
+-- are reserved when inside a trusted module declaration body.
