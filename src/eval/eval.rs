@@ -16,11 +16,13 @@ pub struct Evaluator {
     pub(crate) env: Env,
     /// All user-defined function declarations (by name).
     pub(crate) fns: HashMap<String, ast::FnDecl>,
+    /// Active mock dispatch table: fn/module-method name → (pattern, result) clauses.
+    pub(crate) mock_fns: HashMap<String, Vec<(ast::Pattern, ast::Expr)>>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new() }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new() }
     }
 
     // =========================================================================
@@ -46,10 +48,15 @@ impl Evaluator {
         if let Some(helpers) = &fd.helpers {
             for h in helpers {
                 match h {
-                    ast::HelperDecl::Compact { name, body, span, .. } => {
+                    ast::HelperDecl::Compact { name, body, span, effects, input_type, output_type, .. } => {
                         let helper_decl = ast::FnDecl {
                             name: name.clone(),
-                            signature: fd.signature.clone(),
+                            signature: ast::FnSignature {
+                                effects: effects.clone(),
+                                input_type: input_type.clone(),
+                                output_type: output_type.clone(),
+                                span: span.clone(),
+                            },
                             in_clause: ast::Pattern::Binding("_in".to_string(), span.clone()),
                             out_clause: body.clone(),
                             confidence: None,
@@ -90,6 +97,20 @@ impl Evaluator {
     }
 
     fn eval_fn_once(&mut self, fn_name: &str, arg: Value) -> Result<Thunk, RuntimeError> {
+        if let Some(clauses) = self.mock_fns.get(fn_name).cloned() {
+            for (pat, expr) in &clauses {
+                if self.pattern_matches(pat, &arg) {
+                    self.env.push_scope();
+                    self.bind_pattern(pat, &arg)?;
+                    let result = self.eval_tail(expr)?;
+                    self.env.pop_scope();
+                    return Ok(result);
+                }
+            }
+            return Err(RuntimeError::new(format!(
+                "mock '{}': no clause matched arg: {}", fn_name, arg
+            )));
+        }
         if stdlib::is_stdlib(fn_name) {
             let v = stdlib::dispatch(fn_name, vec![arg], self)?;
             return Ok(Thunk::Value(v));
@@ -113,6 +134,21 @@ impl Evaluator {
                 let arg_vals = self.eval_args(args)?;
                 match function.as_ref() {
                     ast::Expr::Var(name, _) => {
+                        let maybe_fn = self.env.lookup(name).cloned();
+                        match maybe_fn {
+                            Some(Value::FnRef(fn_name)) => {
+                                let arg = pack_args(arg_vals);
+                                if self.fns.contains_key(fn_name.as_str()) {
+                                    return Ok(Thunk::TailCall { fn_name, arg });
+                                }
+                                return Ok(Thunk::Value(self.dispatch_by_name(&fn_name, arg, span)?));
+                            }
+                            Some(v @ Value::PartialFn { .. }) => {
+                                let arg = pack_args(arg_vals);
+                                return Ok(Thunk::Value(self.call_value(v, arg, span)?));
+                            }
+                            _ => {}
+                        }
                         if self.fns.contains_key(name.as_str()) {
                             let arg = pack_args(arg_vals);
                             return Ok(Thunk::TailCall { fn_name: name.clone(), arg });
@@ -122,6 +158,21 @@ impl Evaluator {
                     }
                     ast::Expr::QualifiedName(parts, _) => {
                         let name = parts.join(".");
+                        if let Some(clauses) = self.mock_fns.get(&name).cloned() {
+                            let arg = pack_args(arg_vals);
+                            for (pat, expr) in &clauses {
+                                if self.pattern_matches(pat, &arg) {
+                                    self.env.push_scope();
+                                    self.bind_pattern(pat, &arg)?;
+                                    let result = self.eval_tail(expr)?;
+                                    self.env.pop_scope();
+                                    return Ok(result);
+                                }
+                            }
+                            return Err(RuntimeError::at(
+                                format!("mock '{}': no clause matched", name), span
+                            ));
+                        }
                         Ok(Thunk::Value(stdlib::dispatch(&name, arg_vals, self)?))
                     }
                     ast::Expr::UpperVar(name, _) => {
@@ -200,11 +251,38 @@ impl Evaluator {
                 let arg_vals = self.eval_args(args)?;
                 match function.as_ref() {
                     ast::Expr::Var(name, _) => {
+                        let maybe_fn = self.env.lookup(name).cloned();
+                        match maybe_fn {
+                            Some(Value::FnRef(fn_name)) => {
+                                let arg = pack_args(arg_vals);
+                                return self.call_fn(&fn_name, arg);
+                            }
+                            Some(v @ Value::PartialFn { .. }) => {
+                                let arg = pack_args(arg_vals);
+                                return self.call_value(v, arg, span);
+                            }
+                            _ => {}
+                        }
                         let arg = pack_args(arg_vals);
                         self.dispatch_by_name(name, arg, span)
                     }
                     ast::Expr::QualifiedName(parts, _) => {
                         let name = parts.join(".");
+                        if let Some(clauses) = self.mock_fns.get(&name).cloned() {
+                            let arg = pack_args(arg_vals);
+                            for (pat, expr) in &clauses {
+                                if self.pattern_matches(pat, &arg) {
+                                    self.env.push_scope();
+                                    self.bind_pattern(pat, &arg)?;
+                                    let result = self.eval_expr(expr)?;
+                                    self.env.pop_scope();
+                                    return Ok(result);
+                                }
+                            }
+                            return Err(RuntimeError::at(
+                                format!("mock '{}': no clause matched", name), span
+                            ));
+                        }
                         stdlib::dispatch(&name, arg_vals, self)
                     }
                     ast::Expr::UpperVar(name, _) => {
@@ -382,7 +460,7 @@ impl Evaluator {
         if stdlib::is_stdlib(name) {
             return stdlib::dispatch(name, vec![arg], self);
         }
-        if self.fns.contains_key(name) {
+        if self.fns.contains_key(name) || self.mock_fns.contains_key(name) {
             return self.call_fn(name, arg);
         }
         Err(RuntimeError::at(format!("undefined function '{}'", name), span))
@@ -450,6 +528,20 @@ impl Evaluator {
             ast::Expr::Var(name, _) => self.dispatch_by_name(name, piped, span),
             ast::Expr::QualifiedName(parts, _) => {
                 let name = parts.join(".");
+                if let Some(clauses) = self.mock_fns.get(&name).cloned() {
+                    for (pat, expr) in &clauses {
+                        if self.pattern_matches(pat, &piped) {
+                            self.env.push_scope();
+                            self.bind_pattern(pat, &piped)?;
+                            let result = self.eval_expr(expr)?;
+                            self.env.pop_scope();
+                            return Ok(result);
+                        }
+                    }
+                    return Err(RuntimeError::at(
+                        format!("mock '{}': no clause matched in pipeline", name), span
+                    ));
+                }
                 stdlib::dispatch(&name, vec![piped], self)
             }
             ast::Expr::Call { function, args, span: call_span } => {
