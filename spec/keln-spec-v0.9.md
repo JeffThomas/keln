@@ -1341,25 +1341,24 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] Formal grammar (EBNF) — complete (keln-grammar-v0.9.ebnf)
 - [x] Parser precedence and associativity formally specified (grammar section 19)
 - [x] Trusted module fuzz grammar (grammar section 20)
-- [ ] Effect system formal semantics document
-- [ ] Refinement constraint evaluator specification
-- [ ] forall sampling implementation specification
+- [x] Effect system formal semantics document (keln-effects-formal-v0.9.md)
+- [x] Refinement constraint evaluator specification (keln-refinements-v0.9.md)
+- [x] forall sampling implementation specification (keln-forall-sampling-v0.9.md)
 
 ### Phase 2 — Tree-walking interpreter (Rust)
-- [ ] Lexer
-- [ ] Parser → typed AST (`do` blocks, `Never` return type, forall operators)
-- [ ] Type checker (FunctionRef, Cloneable, Result<T,E>, Eq derivation,
-       `Never` type checking, variant field access)
-- [ ] Effect checker
-- [ ] Refinement constraint evaluator
-- [ ] Tree-walking evaluator with TCO (trampolining)
-- [ ] `verify` executor: given + forall + FunctionRef mocking
-- [ ] `VerificationResult` emitter (JSON)
+- [x] Lexer (9 tests)
+- [x] Parser → typed AST (`do` blocks, `Never` return type, forall operators) (15 tests)
+- [x] Type checker (FunctionRef, Cloneable, Result<T,E>, Eq derivation,
+       `Never` type checking, variant field access) (23 tests)
+- [x] Effect checker
+- [x] Tree-walking evaluator with TCO (trampolining) (23 tests)
+- [x] `verify` executor: given + forall + FunctionRef mocking (13 tests)
+- [x] `VerificationResult` emitter (JSON)
+- [x] Clock effect and mock support (module mock dispatch)
 - [ ] Channel and task primitives (Tokio); `Channel.new<T>()` call form
+- [ ] Refinement constraint evaluator (runtime enforcement)
 - [ ] Helper function scoping
 - [ ] Clone operation
-- [ ] `do` block evaluation (including `Never`-typed final expressions)
-- [ ] Clock effect and mock support
 - [ ] Structural fingerprint computation
 - [ ] Log, Float, Timestamp arithmetic modules
 
@@ -1398,5 +1397,4 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 
 *Keln specification v0.9 — A language designed by AI, for AI.*
 *Three independent validation exercises complete. Formal EBNF grammar complete.*
-*Phase 1 remaining: effect system semantics, constraint evaluator spec, forall sampling spec.*
-*Phase 2 begins when those three documents are written.*
+*Phase 1 complete. Phase 2 functional: lexer, parser, type checker, evaluator, verify executor, VerificationResult JSON — 91 tests passing.*
