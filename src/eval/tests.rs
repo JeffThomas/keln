@@ -412,6 +412,172 @@ fn process { Pure Int -> Int
     }
 
     // =========================================================================
+    // Refinement constraint checks (item 10)
+    // =========================================================================
+
+    #[test]
+    fn test_refinement_range_pass() {
+        let result = eval_fn(
+            r#"type Packet = | Frame { port: Int where 1..65535 }
+fn mkFrame { Pure Int -> Packet
+    in: p
+    out: Frame { port: p }
+}"#,
+            "mkFrame",
+            Value::Int(8080),
+        );
+        assert!(result.is_ok(), "8080 should be in 1..65535");
+    }
+
+    #[test]
+    fn test_refinement_range_fail_low() {
+        let result = eval_fn(
+            r#"type Packet = | Frame { port: Int where 1..65535 }
+fn mkFrame { Pure Int -> Packet
+    in: p
+    out: Frame { port: p }
+}"#,
+            "mkFrame",
+            Value::Int(0),
+        );
+        assert!(result.is_err(), "0 should violate 1..65535");
+        assert!(result.unwrap_err().contains("out of range"), "error should mention out of range");
+    }
+
+    #[test]
+    fn test_refinement_comparison_pass() {
+        let result = eval_fn(
+            r#"type Job = | Running { attempt: Int where >= 1 }
+fn mkRunning { Pure Int -> Job
+    in: n
+    out: Running { attempt: n }
+}"#,
+            "mkRunning",
+            Value::Int(3),
+        );
+        assert!(result.is_ok(), "3 >= 1 should pass");
+    }
+
+    #[test]
+    fn test_refinement_comparison_fail() {
+        let result = eval_fn(
+            r#"type Job = | Running { attempt: Int where >= 1 }
+fn mkRunning { Pure Int -> Job
+    in: n
+    out: Running { attempt: n }
+}"#,
+            "mkRunning",
+            Value::Int(0),
+        );
+        assert!(result.is_err(), "0 >= 1 should fail");
+    }
+
+    #[test]
+    fn test_refinement_length_pass() {
+        let result = eval_fn(
+            r#"type Record = | Named { label: String where len > 0 }
+fn mkNamed { Pure String -> Record
+    in: s
+    out: Named { label: s }
+}"#,
+            "mkNamed",
+            Value::Str("hello".to_string()),
+        );
+        assert!(result.is_ok(), "non-empty string should pass len > 0");
+    }
+
+    #[test]
+    fn test_refinement_length_fail() {
+        let result = eval_fn(
+            r#"type Record = | Named { label: String where len > 0 }
+fn mkNamed { Pure String -> Record
+    in: s
+    out: Named { label: s }
+}"#,
+            "mkNamed",
+            Value::Str("".to_string()),
+        );
+        assert!(result.is_err(), "empty string should fail len > 0");
+    }
+
+    #[test]
+    fn test_refinement_product_type_pass() {
+        let result = eval_fn(
+            r#"type Config = { delay: Int where >= 1, attempts: Int where 1..10 }
+fn mkConfig { Pure Unit -> Config
+    in: _
+    out: Config { delay: 30, attempts: 3 }
+}"#,
+            "mkConfig",
+            Value::Unit,
+        );
+        assert!(result.is_ok(), "valid Config should construct fine: got {:?}", result);
+    }
+
+    #[test]
+    fn test_refinement_product_type_fail() {
+        let result = eval_fn(
+            r#"type Config = { delay: Int where >= 1, attempts: Int where 1..10 }
+fn mkConfig { Pure Unit -> Config
+    in: _
+    out: Config { delay: 30, attempts: 11 }
+}"#,
+            "mkConfig",
+            Value::Unit,
+        );
+        assert!(result.is_err(), "attempts: 11 should violate 1..10");
+    }
+
+    // =========================================================================
+    // Task spawn + await (item 9)
+    // =========================================================================
+
+    #[test]
+    fn test_task_spawn_fn_ref() {
+        let result = eval_fn(
+            r#"fn compute { IO Unit -> Int
+    in: _
+    out: 42
+}
+fn runIt { IO Unit -> Int
+    in: _
+    out: do {
+        let t = Task.spawn(compute)
+        Task.await(t)
+    }
+}"#,
+            "runIt",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_task_await_all() {
+        let result = eval_fn(
+            r#"fn computeA { IO Unit -> Int
+    in: _
+    out: 11
+}
+fn computeB { IO Unit -> Int
+    in: _
+    out: 12
+}
+fn runAll { IO Unit -> List<Int>
+    in: _
+    out: do {
+        let t1 = Task.spawn(computeA)
+        let t2 = Task.spawn(computeB)
+        Task.awaitAll([t1, t2])
+    }
+}"#,
+            "runAll",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::List(vec![Value::Int(11), Value::Int(12)])));
+    }
+
+    // =========================================================================
     // Channel operations (synchronous)
     // =========================================================================
 

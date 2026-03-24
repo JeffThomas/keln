@@ -18,11 +18,13 @@ pub struct Evaluator {
     pub(crate) fns: HashMap<String, ast::FnDecl>,
     /// Active mock dispatch table: fn/module-method name → (pattern, result) clauses.
     pub(crate) mock_fns: HashMap<String, Vec<(ast::Pattern, ast::Expr)>>,
+    /// Inline field constraints by variant/product-type name → field declarations.
+    pub(crate) variant_fields: HashMap<String, Vec<ast::FieldTypeDecl>>,
 }
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new() }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new() }
     }
 
     // =========================================================================
@@ -38,6 +40,7 @@ impl Evaluator {
                         self.bind_pattern_to_env(&lb.pattern, v);
                     }
                 }
+                ast::TopLevelDecl::TypeDecl(td) => self.register_type_decl(td),
                 _ => {}
             }
         }
@@ -72,6 +75,22 @@ impl Evaluator {
                     ast::HelperDecl::Full(inner) => self.register_fn(inner),
                 }
             }
+        }
+    }
+
+    fn register_type_decl(&mut self, td: &ast::TypeDecl) {
+        match &td.def {
+            ast::TypeDef::Sum(variants) => {
+                for v in variants {
+                    if let ast::VariantPayload::Record(fields) = &v.payload {
+                        self.variant_fields.insert(v.name.clone(), fields.clone());
+                    }
+                }
+            }
+            ast::TypeDef::Product(fields) => {
+                self.variant_fields.insert(td.name.clone(), fields.clone());
+            }
+            _ => {}
         }
     }
 
@@ -319,6 +338,24 @@ impl Evaluator {
                     let v = self.eval_expr(&fv.value)?;
                     fvs.push((fv.name.clone(), v));
                 }
+                let variant_name: Option<String> = match name {
+                    Some(name_expr) => match name_expr.as_ref() {
+                        ast::Expr::UpperVar(n, _) => Some(n.clone()),
+                        _ => None,
+                    },
+                    None => None,
+                };
+                if let Some(vname) = &variant_name {
+                    if let Some(fdecls) = self.variant_fields.get(vname.as_str()).cloned() {
+                        for fdecl in &fdecls {
+                            if let Some(rc) = &fdecl.refinement {
+                                if let Some((_, val)) = fvs.iter().find(|(n, _)| n == &fdecl.name) {
+                                    check_refinement(val, rc, &fdecl.name, &fdecl.span)?;
+                                }
+                            }
+                        }
+                    }
+                }
                 match name {
                     Some(name_expr) => {
                         if let ast::Expr::UpperVar(type_name, _) = name_expr.as_ref() {
@@ -349,7 +386,7 @@ impl Evaluator {
                 Ok(result)
             }
 
-            ast::Expr::Select { arms, timeout, span } => {
+            ast::Expr::Select { arms, timeout, span: _ } => {
                 for arm in arms {
                     let chan_val = self.eval_expr(&arm.channel)?;
                     if let Value::Channel(ch) = chan_val {
@@ -367,7 +404,7 @@ impl Evaluator {
                 if let Some(ta) = timeout {
                     return self.eval_expr(&ta.body);
                 }
-                Err(RuntimeError::at("select: no channel ready in synchronous evaluator", span))
+                Ok(Value::Unit)
             }
 
             ast::Expr::ChannelSend { channel, value, span } => {
@@ -849,5 +886,128 @@ fn eval_field_access(
             format!("field access '{}' on non-record: {}", field, obj),
             span,
         )),
+    }
+}
+
+// =============================================================================
+// Refinement constraint checking
+// =============================================================================
+
+fn check_refinement(
+    value: &Value,
+    rc: &ast::RefinementConstraint,
+    field: &str,
+    span: &ast::Span,
+) -> Result<(), RuntimeError> {
+    match rc {
+        ast::RefinementConstraint::Range(lo, hi) => match value {
+            Value::Int(n) => {
+                let lo_i = number_to_i64(lo);
+                let hi_i = number_to_i64(hi);
+                if *n < lo_i || *n > hi_i {
+                    return Err(RuntimeError::at(
+                        format!("field '{}': {} is out of range {}..{}", field, n, lo_i, hi_i),
+                        span,
+                    ));
+                }
+            }
+            Value::Float(f) => {
+                let lo_f = number_to_f64(lo);
+                let hi_f = number_to_f64(hi);
+                if *f < lo_f || *f > hi_f {
+                    return Err(RuntimeError::at(
+                        format!("field '{}': {} is out of range {}..{}", field, f, lo_f, hi_f),
+                        span,
+                    ));
+                }
+            }
+            _ => {}
+        },
+        ast::RefinementConstraint::Comparison(op, n) => match value {
+            Value::Int(v) => {
+                let n_i = number_to_i64(n);
+                if !apply_cmp_i(*v, op, n_i) {
+                    return Err(RuntimeError::at(
+                        format!("field '{}': {} violates where {} {}", field, v, op_str(op), n_i),
+                        span,
+                    ));
+                }
+            }
+            Value::Float(v) => {
+                let n_f = number_to_f64(n);
+                if !apply_cmp_f(*v, op, n_f) {
+                    return Err(RuntimeError::at(
+                        format!("field '{}': {} violates where {} {}", field, v, op_str(op), n_f),
+                        span,
+                    ));
+                }
+            }
+            _ => {}
+        },
+        ast::RefinementConstraint::Length(op, n) => {
+            if let Value::Str(s) = value {
+                let len = s.chars().count() as i64;
+                if !apply_cmp_i(len, op, *n) {
+                    return Err(RuntimeError::at(
+                        format!(
+                            "field '{}': string length {} violates where len {} {}",
+                            field, len, op_str(op), n
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
+        ast::RefinementConstraint::Format(_) => {
+            // Phase 3: regex/format matching not yet implemented
+        }
+    }
+    Ok(())
+}
+
+fn number_to_i64(n: &ast::Number) -> i64 {
+    match n {
+        ast::Number::Int(i) => *i,
+        ast::Number::Float(f) => *f as i64,
+    }
+}
+
+fn number_to_f64(n: &ast::Number) -> f64 {
+    match n {
+        ast::Number::Int(i) => *i as f64,
+        ast::Number::Float(f) => *f,
+    }
+}
+
+fn apply_cmp_i(v: i64, op: &ast::ComparisonOp, n: i64) -> bool {
+    match op {
+        ast::ComparisonOp::Eq => v == n,
+        ast::ComparisonOp::Ne => v != n,
+        ast::ComparisonOp::Gt => v > n,
+        ast::ComparisonOp::Lt => v < n,
+        ast::ComparisonOp::Ge => v >= n,
+        ast::ComparisonOp::Le => v <= n,
+    }
+}
+
+fn apply_cmp_f(v: f64, op: &ast::ComparisonOp, n: f64) -> bool {
+    match op {
+        ast::ComparisonOp::Eq => (v - n).abs() < f64::EPSILON,
+        ast::ComparisonOp::Ne => (v - n).abs() >= f64::EPSILON,
+        ast::ComparisonOp::Gt => v > n,
+        ast::ComparisonOp::Lt => v < n,
+        ast::ComparisonOp::Ge => v >= n,
+        ast::ComparisonOp::Le => v <= n,
+    }
+}
+
+fn op_str(op: &ast::ComparisonOp) -> &'static str {
+    match op {
+        ast::ComparisonOp::Eq => "==",
+        ast::ComparisonOp::Ne => "!=",
+        ast::ComparisonOp::Gt => ">",
+        ast::ComparisonOp::Lt => "<",
+        ast::ComparisonOp::Ge => ">=",
+        ast::ComparisonOp::Le => "<=",
     }
 }

@@ -696,9 +696,14 @@ pub fn dispatch(
         // =====================================================================
         "Task.spawn" => {
             let v = one(args, "Task.spawn")?;
+            let result = match &v {
+                Value::FnRef(name) => ev.call_fn(name, Value::Unit)?,
+                Value::PartialFn { name, bound } => ev.call_fn(name, Value::Record(bound.clone()))?,
+                _ => v.clone(),
+            };
             Ok(Value::Variant {
                 name: "Task".to_string(),
-                payload: VariantPayload::Tuple(Box::new(v)),
+                payload: VariantPayload::Tuple(Box::new(result)),
             })
         }
         "Task.await" => {
