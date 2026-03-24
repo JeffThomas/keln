@@ -1355,8 +1355,8 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] `verify` executor: given + forall + FunctionRef mocking (13 tests)
 - [x] `VerificationResult` emitter (JSON)
 - [x] Clock effect and mock support (module mock dispatch)
-- [ ] Channel and task primitives (Tokio); `Channel.new<T>()` call form
-- [ ] Refinement constraint evaluator (runtime enforcement)
+- [x] Channel and task primitives; `Channel.new<T>()`, `Task.spawn` FunctionRef invocation (sync model)
+- [x] Refinement constraint evaluator (runtime enforcement): Range, Comparison, Length at construction time (8 tests)
 - [ ] Helper function scoping
 - [ ] Clone operation
 - [ ] Structural fingerprint computation
@@ -1397,4 +1397,4 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 
 *Keln specification v0.9 — A language designed by AI, for AI.*
 *Three independent validation exercises complete. Formal EBNF grammar complete.*
-*Phase 1 complete. Phase 2 functional: lexer, parser, type checker, evaluator, verify executor, VerificationResult JSON — 91 tests passing.*
+*Phase 1 complete. Phase 2 functional: lexer, parser, type checker, evaluator, verify executor, VerificationResult JSON, refinement checks, Task.spawn — 101 tests passing.*
