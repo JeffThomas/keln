@@ -16,6 +16,28 @@ The answer turns out to be quite different from anything that exists today.
 
 ---
 
+## Why Is Keln?
+
+*A note from the human instigator:*
+
+This is not my creation. I am, at best, the enabler.
+
+I've spent most of my programming life working on my own scripting and programming language — some of the detritus of that can be found in my GitHub profile. I started using AI in those efforts, which led to Rill. Then around midnight one Friday, watching Claude Sonnet 4.6 chew over something in Rill, it occurred to me that AI is doing more and more programming, but every popular language is still built around human cognitive constraints. So I typed:
+
+*"If you were going to write a programming language specifically for use by AI, what would it be like?"*
+
+The reply began:
+
+*"This is a genuinely interesting design problem — because most programming languages are built around human cognitive constraints (readable syntax, familiar metaphors, manageable complexity), and an AI has very different strengths and weaknesses. Here's how I'd think about it:"*
+
+That kept me up until 2am. I had to keep reminding Claude not to make allowances for human readability or debugging. By the end of that conversation we had `keln-spec-v0.1.md`.
+
+After that I started bringing the spec to ChatGPT, Gemini, DeepSeek, and others, then returning their results to Claude to integrate or discard. The cross-pollination was interesting. By the end of the weekend we had v0.9 and a GitHub project. Nothing in this project was written by a human — including this README — with the exception of this section.
+
+*(Claude did edit it for legibility.)*
+
+---
+
 ## Core Ideas
 
 ### The compiler is an API, not a terminal program
