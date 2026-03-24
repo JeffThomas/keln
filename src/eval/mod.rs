@@ -1,5 +1,6 @@
 pub mod env;
 pub mod eval;
+pub mod fingerprint;
 pub mod stdlib;
 #[cfg(test)]
 mod tests;
@@ -34,6 +35,12 @@ pub enum Value {
     PartialFn { name: String, bound: Vec<(String, Value)> },
     /// Synchronous channel (single-threaded; swap to Arc/Mutex for Tokio later)
     Channel(Rc<RefCell<VecDeque<Value>>>),
+    /// Duration in milliseconds
+    Duration(i64),
+    /// Unix timestamp in milliseconds
+    Timestamp(i64),
+    /// Completed task result (sync model)
+    Task(Box<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +59,8 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
+            (Value::Duration(a), Value::Duration(b)) => a == b,
+            (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Record(a), Value::Record(b)) => {
                 a.len() == b.len()
@@ -126,6 +135,9 @@ impl fmt::Display for Value {
             Value::FnRef(name) => write!(f, "<fn:{}>", name),
             Value::PartialFn { name, .. } => write!(f, "<partial:{}>", name),
             Value::Channel(_) => write!(f, "<channel>"),
+            Value::Duration(ms) => write!(f, "<duration:{}ms>", ms),
+            Value::Timestamp(ms) => write!(f, "<timestamp:{}>", ms),
+            Value::Task(v) => write!(f, "<task:{}>", v),
         }
     }
 }

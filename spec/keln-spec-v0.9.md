@@ -1364,9 +1364,9 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] Channel and task primitives; `Channel.new<T>()`, `Task.spawn` FunctionRef invocation (sync model)
 - [x] Refinement constraint evaluator (runtime enforcement): Range, Comparison, Length at construction time (8 tests)
 - [x] Helper function scoping: compact helpers use own declared signature; implicit input binding `it` (4 tests)
-- [ ] Clone operation
-- [ ] Structural fingerprint computation
-- [ ] Log, Float, Timestamp arithmetic modules
+- [x] Clone operation: `clone(expr)` returns value; `Value::Duration`/`Value::Timestamp` added (2 tests)
+- [x] Structural fingerprint computation: `effect_signature`, `ast_shape`, `call_graph` over `FnDecl` (5 tests)
+- [x] Log, Float, Timestamp arithmetic modules: Log.{debug,info,warn,error}, Float complete, Int.{toFloat,pow}, Duration, Timestamp, Clock.{now,since,after,sleep} (22 tests)
 
 ### Phase 3 — Standard library (Rust)
 - [ ] Result<T,E>, Maybe

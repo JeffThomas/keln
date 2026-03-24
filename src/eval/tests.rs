@@ -647,6 +647,311 @@ fn runAll { IO Unit -> List<Int>
     }
 
     // =========================================================================
+    // Clone operation
+    // =========================================================================
+
+    #[test]
+    fn test_clone_returns_value() {
+        let result = eval_fn(
+            r#"fn identity { Pure Int -> Int
+    in: n
+    out: clone(n)
+}"#,
+            "identity",
+            Value::Int(42),
+        );
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_clone_in_do_block() {
+        let result = eval_fn(
+            r#"fn doubled { Pure Int -> Int
+    in: n
+    out: do {
+        let c = clone(n)
+        c + n
+    }
+}"#,
+            "doubled",
+            Value::Int(5),
+        );
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    // =========================================================================
+    // Log module
+    // =========================================================================
+
+    #[test]
+    fn test_log_info_returns_unit() {
+        let result = eval_fn(
+            r#"fn logIt { Log String -> Unit
+    in: msg
+    out: Log.info(msg)
+}"#,
+            "logIt",
+            Value::Str("hello".to_string()),
+        );
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    #[test]
+    fn test_log_error_returns_unit() {
+        let result = eval_fn(
+            r#"fn logErr { Log String -> Unit
+    in: msg
+    out: Log.error(msg)
+}"#,
+            "logErr",
+            Value::Str("boom".to_string()),
+        );
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    // =========================================================================
+    // Float complete arithmetic
+    // =========================================================================
+
+    #[test]
+    fn test_float_add() {
+        let result = eval_fn(
+            r#"fn addFloats { Pure Unit -> Float
+    in: _
+    out: Float.add(1.5, 2.5)
+}"#,
+            "addFloats",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(4.0)));
+    }
+
+    #[test]
+    fn test_float_multiply() {
+        let result = eval_fn(
+            r#"fn mulFloats { Pure Unit -> Float
+    in: _
+    out: Float.multiply(3.0, 4.0)
+}"#,
+            "mulFloats",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(12.0)));
+    }
+
+    #[test]
+    fn test_float_divide() {
+        let result = eval_fn(
+            r#"fn divFloats { Pure Unit -> Float
+    in: _
+    out: Float.divide(10.0, 4.0)
+}"#,
+            "divFloats",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(2.5)));
+    }
+
+    #[test]
+    fn test_float_round() {
+        let result = eval_fn(
+            r#"fn roundIt { Pure Unit -> Float
+    in: _
+    out: Float.round(2.7)
+}"#,
+            "roundIt",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(3.0)));
+    }
+
+    #[test]
+    fn test_float_to_int() {
+        let result = eval_fn(
+            r#"fn truncate { Pure Unit -> Int
+    in: _
+    out: Float.toInt(9.9)
+}"#,
+            "truncate",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(9)));
+    }
+
+    #[test]
+    fn test_float_from_int() {
+        let result = eval_fn(
+            r#"fn convertToFloat { Pure Unit -> Float
+    in: _
+    out: Float.fromInt(7)
+}"#,
+            "convertToFloat",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(7.0)));
+    }
+
+    #[test]
+    fn test_float_compare_less() {
+        let result = eval_fn(
+            r#"fn cmp { Pure Unit -> Bool
+    in: _
+    out: match Float.compare(1.0, 2.0) {
+        LessThan    -> true
+        Equal       -> false
+        GreaterThan -> false
+    }
+}"#,
+            "cmp",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
+    // Int additions
+    // =========================================================================
+
+    #[test]
+    fn test_int_to_float() {
+        let result = eval_fn(
+            r#"fn intToFloat { Pure Unit -> Float
+    in: _
+    out: Int.toFloat(3)
+}"#,
+            "intToFloat",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Float(3.0)));
+    }
+
+    #[test]
+    fn test_int_pow() {
+        let result = eval_fn(
+            r#"fn square { Pure Unit -> Int
+    in: _
+    out: Int.pow(3, 4)
+}"#,
+            "square",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(81)));
+    }
+
+    // =========================================================================
+    // Duration and Timestamp
+    // =========================================================================
+
+    #[test]
+    fn test_duration_ms() {
+        let result = eval_fn(
+            r#"fn makeDur { Pure Unit -> Bool
+    in: _
+    out: match Duration.ms(500) {
+        _ -> true
+    }
+}"#,
+            "makeDur",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_duration_seconds_and_add() {
+        let result = eval_fn(
+            r#"fn totalMs { Pure Unit -> Bool
+    in: _
+    out: do {
+        let d1 = Duration.seconds(2)
+        let d2 = Duration.ms(500)
+        let total = Duration.add(d1, d2)
+        match total {
+            _ -> true
+        }
+    }
+}"#,
+            "totalMs",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_duration_multiply() {
+        let result = eval_fn(
+            r#"fn tripled { Pure Unit -> Bool
+    in: _
+    out: match Duration.multiply(Duration.seconds(1), 3) {
+        _ -> true
+    }
+}"#,
+            "tripled",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_timestamp_gte() {
+        let result = eval_fn(
+            r#"fn checkOrder { Clock Unit -> Bool
+    in: _
+    out: do {
+        let t1 = Clock.now()
+        let t2 = Clock.now()
+        Timestamp.gte(t2, t1)
+    }
+}"#,
+            "checkOrder",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_timestamp_add_sub_roundtrip() {
+        let result = eval_fn(
+            r#"fn roundtrip { Clock Unit -> Bool
+    in: _
+    out: do {
+        let base = Clock.now()
+        let offset = Duration.seconds(10)
+        let later = Timestamp.add(base, offset)
+        let diff = Timestamp.sub(later, base)
+        match diff {
+            _ -> true
+        }
+    }
+}"#,
+            "roundtrip",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_timestamp_compare() {
+        let result = eval_fn(
+            r#"fn cmpTs { Clock Unit -> Bool
+    in: _
+    out: do {
+        let t1 = Clock.now()
+        let t2 = Timestamp.add(t1, Duration.ms(1000))
+        match Timestamp.compare(t1, t2) {
+            LessThan    -> true
+            Equal       -> false
+            GreaterThan -> false
+        }
+    }
+}"#,
+            "cmpTs",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
     // Channel operations (synchronous)
     // =========================================================================
 

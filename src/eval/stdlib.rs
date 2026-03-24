@@ -72,6 +72,38 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Task.await"
             | "Task.awaitAll"
             | "Task.sequence"
+            | "Log.debug"
+            | "Log.info"
+            | "Log.warn"
+            | "Log.error"
+            | "Float.add"
+            | "Float.sub"
+            | "Float.multiply"
+            | "Float.divide"
+            | "Float.pow"
+            | "Float.round"
+            | "Float.toInt"
+            | "Float.fromInt"
+            | "Float.compare"
+            | "Int.toFloat"
+            | "Int.pow"
+            | "Duration.ms"
+            | "Duration.seconds"
+            | "Duration.minutes"
+            | "Duration.add"
+            | "Duration.multiply"
+            | "Timestamp.add"
+            | "Timestamp.sub"
+            | "Timestamp.compare"
+            | "Timestamp.gte"
+            | "Timestamp.lte"
+            | "Timestamp.gt"
+            | "Timestamp.lt"
+            | "Timestamp.eq"
+            | "Clock.now"
+            | "Clock.since"
+            | "Clock.after"
+            | "Clock.sleep"
     )
 }
 
@@ -741,6 +773,236 @@ pub fn dispatch(
             dispatch("Result.sequence", args, ev)
         }
 
+        // =====================================================================
+        // Log (IO effect — prints to stdout in the sync model)
+        // =====================================================================
+        "Log.debug" | "Log.info" | "Log.warn" | "Log.error" => {
+            let v = one(args, name)?;
+            let level = name.split('.').nth(1).unwrap_or("log");
+            println!("[{}] {}", level.to_uppercase(), v);
+            Ok(Value::Unit)
+        }
+
+        // =====================================================================
+        // Float (complete arithmetic)
+        // =====================================================================
+        "Float.add" => {
+            let (a, b) = two(args, "Float.add")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x + y)),
+                _ => Err(RuntimeError::new("Float.add: expected Float, Float")),
+            }
+        }
+        "Float.sub" => {
+            let (a, b) = two(args, "Float.sub")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x - y)),
+                _ => Err(RuntimeError::new("Float.sub: expected Float, Float")),
+            }
+        }
+        "Float.multiply" => {
+            let (a, b) = two(args, "Float.multiply")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x * y)),
+                _ => Err(RuntimeError::new("Float.multiply: expected Float, Float")),
+            }
+        }
+        "Float.divide" => {
+            let (a, b) = two(args, "Float.divide")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => {
+                    if y == 0.0 {
+                        Err(RuntimeError::new("Float.divide: division by zero"))
+                    } else {
+                        Ok(Value::Float(x / y))
+                    }
+                }
+                _ => Err(RuntimeError::new("Float.divide: expected Float, Float")),
+            }
+        }
+        "Float.pow" => {
+            let (a, b) = two(args, "Float.pow")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => Ok(Value::Float(x.powf(y))),
+                _ => Err(RuntimeError::new("Float.pow: expected Float, Float")),
+            }
+        }
+        "Float.round" => {
+            let v = one(args, "Float.round")?;
+            match v {
+                Value::Float(f) => Ok(Value::Float(f.round())),
+                _ => Err(RuntimeError::new("Float.round: expected Float")),
+            }
+        }
+        "Float.toInt" => {
+            let v = one(args, "Float.toInt")?;
+            match v {
+                Value::Float(f) => Ok(Value::Int(f.trunc() as i64)),
+                _ => Err(RuntimeError::new("Float.toInt: expected Float")),
+            }
+        }
+        "Float.fromInt" => {
+            let v = one(args, "Float.fromInt")?;
+            match v {
+                Value::Int(n) => Ok(Value::Float(n as f64)),
+                _ => Err(RuntimeError::new("Float.fromInt: expected Int")),
+            }
+        }
+        "Float.compare" => {
+            let (a, b) = two(args, "Float.compare")?;
+            match (a, b) {
+                (Value::Float(x), Value::Float(y)) => Ok(ordering(x.partial_cmp(&y))),
+                _ => Err(RuntimeError::new("Float.compare: expected Float, Float")),
+            }
+        }
+
+        // =====================================================================
+        // Int additions
+        // =====================================================================
+        "Int.toFloat" => {
+            let v = one(args, "Int.toFloat")?;
+            match v {
+                Value::Int(n) => Ok(Value::Float(n as f64)),
+                _ => Err(RuntimeError::new("Int.toFloat: expected Int")),
+            }
+        }
+        "Int.pow" => {
+            let (a, b) = two(args, "Int.pow")?;
+            match (a, b) {
+                (Value::Int(base), Value::Int(exp)) if exp >= 0 => {
+                    Ok(Value::Int(base.pow(exp as u32)))
+                }
+                (Value::Int(_), Value::Int(exp)) => Err(RuntimeError::new(format!(
+                    "Int.pow: exponent must be >= 0, got {}",
+                    exp
+                ))),
+                _ => Err(RuntimeError::new("Int.pow: expected Int, Int")),
+            }
+        }
+
+        // =====================================================================
+        // Duration
+        // =====================================================================
+        "Duration.ms" => {
+            let v = one(args, "Duration.ms")?;
+            match v {
+                Value::Int(n) => Ok(Value::Duration(n)),
+                _ => Err(RuntimeError::new("Duration.ms: expected Int")),
+            }
+        }
+        "Duration.seconds" => {
+            let v = one(args, "Duration.seconds")?;
+            match v {
+                Value::Int(n) => Ok(Value::Duration(n * 1_000)),
+                _ => Err(RuntimeError::new("Duration.seconds: expected Int")),
+            }
+        }
+        "Duration.minutes" => {
+            let v = one(args, "Duration.minutes")?;
+            match v {
+                Value::Int(n) => Ok(Value::Duration(n * 60_000)),
+                _ => Err(RuntimeError::new("Duration.minutes: expected Int")),
+            }
+        }
+        "Duration.add" => {
+            let (a, b) = two(args, "Duration.add")?;
+            match (a, b) {
+                (Value::Duration(x), Value::Duration(y)) => Ok(Value::Duration(x + y)),
+                _ => Err(RuntimeError::new("Duration.add: expected Duration, Duration")),
+            }
+        }
+        "Duration.multiply" => {
+            let (a, b) = two(args, "Duration.multiply")?;
+            match (a, b) {
+                (Value::Duration(d), Value::Int(n)) => Ok(Value::Duration(d * n)),
+                _ => Err(RuntimeError::new("Duration.multiply: expected Duration, Int")),
+            }
+        }
+
+        // =====================================================================
+        // Timestamp
+        // =====================================================================
+        "Timestamp.add" => {
+            let (a, b) = two(args, "Timestamp.add")?;
+            match (a, b) {
+                (Value::Timestamp(ts), Value::Duration(d)) => Ok(Value::Timestamp(ts + d)),
+                _ => Err(RuntimeError::new("Timestamp.add: expected Timestamp, Duration")),
+            }
+        }
+        "Timestamp.sub" => {
+            let (a, b) = two(args, "Timestamp.sub")?;
+            match (a, b) {
+                (Value::Timestamp(a), Value::Timestamp(b)) => Ok(Value::Duration(a - b)),
+                _ => Err(RuntimeError::new("Timestamp.sub: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.compare" => {
+            let (a, b) = two(args, "Timestamp.compare")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(ordering(x.partial_cmp(&y))),
+                _ => Err(RuntimeError::new("Timestamp.compare: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.gte" => {
+            let (a, b) = two(args, "Timestamp.gte")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(Value::Bool(x >= y)),
+                _ => Err(RuntimeError::new("Timestamp.gte: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.lte" => {
+            let (a, b) = two(args, "Timestamp.lte")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(Value::Bool(x <= y)),
+                _ => Err(RuntimeError::new("Timestamp.lte: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.gt" => {
+            let (a, b) = two(args, "Timestamp.gt")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(Value::Bool(x > y)),
+                _ => Err(RuntimeError::new("Timestamp.gt: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.lt" => {
+            let (a, b) = two(args, "Timestamp.lt")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(Value::Bool(x < y)),
+                _ => Err(RuntimeError::new("Timestamp.lt: expected Timestamp, Timestamp")),
+            }
+        }
+        "Timestamp.eq" => {
+            let (a, b) = two(args, "Timestamp.eq")?;
+            match (a, b) {
+                (Value::Timestamp(x), Value::Timestamp(y)) => Ok(Value::Bool(x == y)),
+                _ => Err(RuntimeError::new("Timestamp.eq: expected Timestamp, Timestamp")),
+            }
+        }
+
+        // =====================================================================
+        // Clock
+        // =====================================================================
+        "Clock.now" => {
+            Ok(Value::Timestamp(now_millis()))
+        }
+        "Clock.since" => {
+            let v = one(args, "Clock.since")?;
+            match v {
+                Value::Timestamp(ts) => Ok(Value::Duration(now_millis() - ts)),
+                _ => Err(RuntimeError::new("Clock.since: expected Timestamp")),
+            }
+        }
+        "Clock.after" => {
+            let v = one(args, "Clock.after")?;
+            match v {
+                Value::Duration(d) => Ok(Value::Timestamp(now_millis() + d)),
+                _ => Err(RuntimeError::new("Clock.after: expected Duration")),
+            }
+        }
+        "Clock.sleep" => {
+            Ok(Value::Unit)
+        }
+
         _ => Err(RuntimeError::new(format!("unknown stdlib function '{}'", name))),
     }
 }
@@ -830,4 +1092,26 @@ fn is_variant(v: &Value, name: &str) -> bool {
 
 fn sp() -> crate::ast::Span {
     crate::ast::Span { line: 0, column: 0 }
+}
+
+fn ordering(ord: Option<std::cmp::Ordering>) -> Value {
+    match ord {
+        Some(std::cmp::Ordering::Less) => {
+            Value::Variant { name: "LessThan".to_string(), payload: VariantPayload::Unit }
+        }
+        Some(std::cmp::Ordering::Equal) => {
+            Value::Variant { name: "Equal".to_string(), payload: VariantPayload::Unit }
+        }
+        Some(std::cmp::Ordering::Greater) | None => {
+            Value::Variant { name: "GreaterThan".to_string(), payload: VariantPayload::Unit }
+        }
+    }
+}
+
+fn now_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
