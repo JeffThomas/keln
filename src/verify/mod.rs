@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use crate::ast;
 use crate::eval::{Evaluator, RuntimeError, Value, VariantPayload};
-use result::{FnVerifyResult, ForAllOutcome, GivenOutcome, ProofStatus};
+use result::{FnVerifyResult, ForAllOutcome, FuzzMethodResult, FuzzModuleResult, GivenOutcome, ProofStatus};
 
 // =============================================================================
 // VerifyExecutor
@@ -15,6 +15,8 @@ use result::{FnVerifyResult, ForAllOutcome, GivenOutcome, ProofStatus};
 
 pub struct VerifyExecutor {
     pub evaluator: Evaluator,
+    /// Trusted module declarations extracted from the program for fuzz harness.
+    pub trusted_modules: Vec<ast::TrustedModuleDecl>,
 }
 
 impl VerifyExecutor {
@@ -23,7 +25,15 @@ impl VerifyExecutor {
         let program = crate::parser::parse(source).map_err(|e| format!("{}", e))?;
         let mut evaluator = Evaluator::new();
         evaluator.load_program(&program);
-        Ok(VerifyExecutor { evaluator })
+        let trusted_modules = program
+            .declarations
+            .iter()
+            .filter_map(|d| match d {
+                ast::TopLevelDecl::TrustedModuleDecl(tm) => Some(tm.clone()),
+                _ => None,
+            })
+            .collect();
+        Ok(VerifyExecutor { evaluator, trusted_modules })
     }
 
     /// Run all verify blocks in the loaded program.
@@ -306,6 +316,134 @@ impl VerifyExecutor {
             }
         }
     }
+
+    // =========================================================================
+    // Fuzz harness for trusted modules
+    // =========================================================================
+
+    /// Run the fuzz harness against all trusted module declarations in the program.
+    /// For each method with a fuzz block, samples inputs and checks the declared invariant.
+    pub fn fuzz_trusted_modules(&mut self) -> Vec<FuzzModuleResult> {
+        let trusted = self.trusted_modules.clone();
+        let mut results = Vec::new();
+
+        for tm in &trusted {
+            let has_fuzz = tm.fuzz.is_some();
+            let fuzz_decls = tm.fuzz.clone().unwrap_or_default();
+
+            if !has_fuzz {
+                results.push(FuzzModuleResult {
+                    module_name: tm.name.clone(),
+                    methods: vec![],
+                    has_fuzz_block: false,
+                });
+                continue;
+            }
+
+            let mut method_results = Vec::new();
+            for fuzz_decl in &fuzz_decls {
+                let fn_qualified = format!("{}.{}", tm.name, fuzz_decl.fn_name);
+                let invariant_name = match &fuzz_decl.invariant {
+                    ast::FuzzInvariant::CrashesNever => "crashes_never",
+                    ast::FuzzInvariant::ReturnsResult => "returns_result",
+                    ast::FuzzInvariant::Deterministic => "deterministic",
+                };
+
+                // Generate sample inputs for each declared input type
+                let input_samples: Vec<Vec<Value>> = fuzz_decl
+                    .input_types
+                    .iter()
+                    .map(|ty| {
+                        let binding = ast::ForAllBinding {
+                            name: "_fuzz".to_string(),
+                            type_expr: ty.clone(),
+                            refinement: None,
+                            span: fuzz_decl.span.clone(),
+                        };
+                        sample::sample_for_binding(&binding)
+                    })
+                    .collect();
+
+                // Build cross-product of input combinations (up to 20)
+                let combos = cross_product(&input_samples, 20);
+                let iter_count = combos.len();
+
+                let mut passed = true;
+                let mut failure: Option<String> = None;
+
+                for combo in &combos {
+                    let args = combo.clone();
+                    let call_result = crate::eval::stdlib::dispatch(
+                        &fn_qualified,
+                        args.clone(),
+                        &mut self.evaluator,
+                    );
+                    match &fuzz_decl.invariant {
+                        ast::FuzzInvariant::CrashesNever => {
+                            if call_result.is_err() {
+                                passed = false;
+                                failure = Some(format!(
+                                    "crashed on input {:?}: {}",
+                                    args,
+                                    call_result.unwrap_err()
+                                ));
+                                break;
+                            }
+                        }
+                        ast::FuzzInvariant::ReturnsResult => {
+                            match &call_result {
+                                Err(e) => {
+                                    passed = false;
+                                    failure = Some(format!("crashed: {}", e));
+                                    break;
+                                }
+                                Ok(v) => {
+                                    if !is_result_value(v) {
+                                        passed = false;
+                                        failure = Some(format!("returned non-Result: {}", v));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        ast::FuzzInvariant::Deterministic => {
+                            let first = call_result.ok();
+                            let second = crate::eval::stdlib::dispatch(
+                                &fn_qualified,
+                                args.clone(),
+                                &mut self.evaluator,
+                            )
+                            .ok();
+                            if first != second {
+                                passed = false;
+                                failure = Some(format!(
+                                    "non-deterministic on input {:?}",
+                                    args
+                                ));
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                method_results.push(FuzzMethodResult {
+                    fn_name: fuzz_decl.fn_name.clone(),
+                    invariant: invariant_name.to_string(),
+                    iterations: iter_count,
+                    passed,
+                    failure,
+                });
+            }
+
+            results.push(FuzzModuleResult {
+                module_name: tm.name.clone(),
+                methods: method_results,
+                has_fuzz_block: true,
+            });
+        }
+
+        results
+    }
 }
 
 // =========================================================================
@@ -330,4 +468,43 @@ fn value_lt(a: &Value, b: &Value) -> bool {
         (Value::Str(x), Value::Str(y)) => x < y,
         _ => false,
     }
+}
+
+// =========================================================================
+// Fuzz harness helpers
+// =========================================================================
+
+/// Build the cross product of per-argument sample lists, capped at `max` combinations.
+fn cross_product(per_arg: &[Vec<Value>], max: usize) -> Vec<Vec<Value>> {
+    if per_arg.is_empty() {
+        return vec![vec![]];
+    }
+    let mut result: Vec<Vec<Value>> = vec![vec![]];
+    for samples in per_arg {
+        let mut next = Vec::new();
+        'outer: for prefix in &result {
+            for s in samples {
+                if next.len() >= max {
+                    break 'outer;
+                }
+                let mut row = prefix.clone();
+                row.push(s.clone());
+                next.push(row);
+            }
+        }
+        result = next;
+        if result.len() >= max {
+            result.truncate(max);
+            break;
+        }
+    }
+    result
+}
+
+/// Returns true if `v` is an Ok or Err variant (i.e. a Result value).
+fn is_result_value(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Variant { name, .. } if name == "Ok" || name == "Err"
+    )
 }

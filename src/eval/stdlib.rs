@@ -13,6 +13,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Result.isOk"
             | "Result.isErr"
             | "Result.unwrap"
+            | "Result.unwrapOr"
             | "Result.sequence"
             | "Maybe.some"
             | "Maybe.none"
@@ -21,6 +22,8 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Maybe.isSome"
             | "Maybe.isNone"
             | "Maybe.bind"
+            | "Maybe.require"
+            | "Maybe.unwrapOr"
             | "List.map"
             | "List.filter"
             | "List.foldl"
@@ -39,6 +42,10 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.take"
             | "List.drop"
             | "List.range"
+            | "List.fold"
+            | "List.sequence"
+            | "List.repeat"
+            | "List.clone"
             | "Int.parse"
             | "Int.toString"
             | "Int.abs"
@@ -66,11 +73,14 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Bytes.len"
             | "Bytes.empty"
             | "Bytes.fromString"
+            | "Bytes.toString"
             | "Bool.toString"
             | "Bool.not"
             | "Task.spawn"
             | "Task.await"
             | "Task.awaitAll"
+            | "Task.awaitFirst"
+            | "Task.race"
             | "Task.sequence"
             | "Log.debug"
             | "Log.info"
@@ -104,6 +114,41 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Clock.since"
             | "Clock.after"
             | "Clock.sleep"
+            | "Map.empty"
+            | "Map.insert"
+            | "Map.get"
+            | "Map.remove"
+            | "Map.contains"
+            | "Map.keys"
+            | "Map.values"
+            | "Map.toList"
+            | "Map.fromList"
+            | "Map.size"
+            | "Map.merge"
+            | "Set.empty"
+            | "Set.insert"
+            | "Set.contains"
+            | "Set.remove"
+            | "Set.toList"
+            | "Set.fromList"
+            | "Set.union"
+            | "Set.intersect"
+            | "Set.difference"
+            | "Set.size"
+            | "Env.get"
+            | "Env.require"
+            | "Json.parse"
+            | "Json.serialize"
+            | "Http.get"
+            | "Http.post"
+            | "Http.put"
+            | "Http.delete"
+            | "Http.patch"
+            | "HttpServer.start"
+            | "Response.json"
+            | "Response.err"
+            | "GraphQL.execute"
+            | "GraphQL.query"
     )
 }
 
@@ -142,6 +187,15 @@ pub fn dispatch(
                     Ok(*inner)
                 }
                 _ => Err(RuntimeError::new("Result.unwrap: called on Err")),
+            }
+        }
+        "Result.unwrapOr" => {
+            let (result, default) = two(args, "Result.unwrapOr")?;
+            match result {
+                Value::Variant { name, payload: VariantPayload::Tuple(inner) } if name == "Ok" => {
+                    Ok(*inner)
+                }
+                _ => Ok(default),
             }
         }
         "Result.map" => {
@@ -242,13 +296,23 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("Maybe.bind: expected Maybe")),
             }
         }
-        "Maybe.getOr" => {
-            let (maybe, default) = two(args, "Maybe.getOr")?;
+        "Maybe.getOr" | "Maybe.unwrapOr" => {
+            let fname = name;
+            let (maybe, default) = two(args, fname)?;
             match maybe {
                 Value::Variant { name, payload: VariantPayload::Tuple(v) } if name == "Some" => {
                     Ok(*v)
                 }
                 _ => Ok(default),
+            }
+        }
+        "Maybe.require" => {
+            let (maybe, e) = two(args, "Maybe.require")?;
+            match maybe {
+                Value::Variant { name, payload: VariantPayload::Tuple(v) } if name == "Some" => {
+                    Ok(ok(*v))
+                }
+                _ => Ok(err(e)),
             }
         }
 
@@ -469,6 +533,45 @@ pub fn dispatch(
                 }
                 _ => Err(RuntimeError::new("List.range: expected two Ints")),
             }
+        }
+        "List.fold" => {
+            // fold(list, init, fn) — fn receives { acc: U, item: T } record
+            let (list, init, f) = three(args, "List.fold")?;
+            match list {
+                Value::List(items) => {
+                    let mut acc = init;
+                    for item in items {
+                        let record = Value::Record(vec![
+                            ("acc".to_string(), acc),
+                            ("item".to_string(), item),
+                        ]);
+                        acc = ev.call_value(f.clone(), record, &sp())?;
+                    }
+                    Ok(acc)
+                }
+                _ => Err(RuntimeError::new("List.fold: expected List")),
+            }
+        }
+        "List.sequence" => {
+            // List<Result<T,E>> -> Result<List<T>, E>
+            dispatch("Result.sequence", args, ev)
+        }
+        "List.repeat" => {
+            // repeat(value, count) -> List<T>
+            let (value, count) = two(args, "List.repeat")?;
+            match count {
+                Value::Int(n) if n >= 0 => {
+                    Ok(Value::List(vec![value; n as usize]))
+                }
+                Value::Int(n) => Err(RuntimeError::new(format!(
+                    "List.repeat: count must be >= 0, got {}", n
+                ))),
+                _ => Err(RuntimeError::new("List.repeat: expected Int count")),
+            }
+        }
+        "List.clone" => {
+            let v = one(args, "List.clone")?;
+            Ok(v)
         }
 
         // =====================================================================
@@ -704,6 +807,16 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("Bytes.fromString: expected String")),
             }
         }
+        "Bytes.toString" => {
+            let v = one(args, "Bytes.toString")?;
+            match v {
+                Value::Bytes(b) => match String::from_utf8(b) {
+                    Ok(s) => Ok(Value::Str(s)),
+                    Err(_) => Err(RuntimeError::new("Bytes.toString: bytes are not valid UTF-8")),
+                },
+                _ => Err(RuntimeError::new("Bytes.toString: expected Bytes")),
+            }
+        }
 
         // =====================================================================
         // Bool
@@ -755,6 +868,17 @@ pub fn dispatch(
                         .collect(),
                 )),
                 _ => Err(RuntimeError::new("Task.awaitAll: expected List")),
+            }
+        }
+        "Task.awaitFirst" | "Task.race" => {
+            let v = one(args, name)?;
+            match v {
+                Value::List(mut tasks) if !tasks.is_empty() => match tasks.remove(0) {
+                    Value::Task(inner) => Ok(*inner),
+                    other => Ok(other),
+                },
+                Value::List(_) => Err(RuntimeError::new(format!("{}: list is empty", name))),
+                _ => Err(RuntimeError::new(format!("{}: expected List<Task>", name))),
             }
         }
         "Task.sequence" => {
@@ -992,7 +1116,409 @@ pub fn dispatch(
             Ok(Value::Unit)
         }
 
+        // =====================================================================
+        // Map<K,V>
+        // =====================================================================
+        "Map.empty" => Ok(Value::Map(vec![])),
+        "Map.size" => {
+            let v = one(args, "Map.size")?;
+            match v {
+                Value::Map(pairs) => Ok(Value::Int(pairs.len() as i64)),
+                _ => Err(RuntimeError::new("Map.size: expected Map")),
+            }
+        }
+        "Map.insert" => {
+            let (map, kv) = two(args, "Map.insert")?;
+            match (map, kv) {
+                (Value::Map(mut pairs), Value::Record(mut fields)) if fields.len() >= 2 => {
+                    let (_, key) = fields.remove(0);
+                    let (_, val) = fields.remove(0);
+                    pairs.retain(|(k, _)| k != &key);
+                    pairs.push((key, val));
+                    Ok(Value::Map(pairs))
+                }
+                _ => Err(RuntimeError::new("Map.insert: expected Map, {key, value}")),
+            }
+        }
+        "Map.get" => {
+            let (map, key) = two(args, "Map.get")?;
+            match map {
+                Value::Map(pairs) => {
+                    match pairs.into_iter().find(|(k, _)| k == &key) {
+                        Some((_, v)) => Ok(some(v)),
+                        None => Ok(none()),
+                    }
+                }
+                _ => Err(RuntimeError::new("Map.get: expected Map")),
+            }
+        }
+        "Map.remove" => {
+            let (map, key) = two(args, "Map.remove")?;
+            match map {
+                Value::Map(mut pairs) => {
+                    pairs.retain(|(k, _)| k != &key);
+                    Ok(Value::Map(pairs))
+                }
+                _ => Err(RuntimeError::new("Map.remove: expected Map")),
+            }
+        }
+        "Map.contains" => {
+            let (map, key) = two(args, "Map.contains")?;
+            match map {
+                Value::Map(pairs) => Ok(Value::Bool(pairs.iter().any(|(k, _)| k == &key))),
+                _ => Err(RuntimeError::new("Map.contains: expected Map")),
+            }
+        }
+        "Map.keys" => {
+            let v = one(args, "Map.keys")?;
+            match v {
+                Value::Map(pairs) => Ok(Value::List(pairs.into_iter().map(|(k, _)| k).collect())),
+                _ => Err(RuntimeError::new("Map.keys: expected Map")),
+            }
+        }
+        "Map.values" => {
+            let v = one(args, "Map.values")?;
+            match v {
+                Value::Map(pairs) => Ok(Value::List(pairs.into_iter().map(|(_, v)| v).collect())),
+                _ => Err(RuntimeError::new("Map.values: expected Map")),
+            }
+        }
+        "Map.toList" => {
+            let v = one(args, "Map.toList")?;
+            match v {
+                Value::Map(pairs) => Ok(Value::List(
+                    pairs.into_iter().map(|(k, v)| {
+                        Value::Record(vec![("key".to_string(), k), ("value".to_string(), v)])
+                    }).collect()
+                )),
+                _ => Err(RuntimeError::new("Map.toList: expected Map")),
+            }
+        }
+        "Map.fromList" => {
+            let v = one(args, "Map.fromList")?;
+            match v {
+                Value::List(items) => {
+                    let mut pairs = Vec::new();
+                    for item in items {
+                        match item {
+                            Value::Record(mut fields) if fields.len() >= 2 => {
+                                let (_, key) = fields.remove(0);
+                                let (_, val) = fields.remove(0);
+                                pairs.retain(|(k, _): &(Value, Value)| k != &key);
+                                pairs.push((key, val));
+                            }
+                            _ => return Err(RuntimeError::new("Map.fromList: each item must be {key, value}")),
+                        }
+                    }
+                    Ok(Value::Map(pairs))
+                }
+                _ => Err(RuntimeError::new("Map.fromList: expected List")),
+            }
+        }
+        "Map.merge" => {
+            let (a, b) = two(args, "Map.merge")?;
+            match (a, b) {
+                (Value::Map(mut pairs_a), Value::Map(pairs_b)) => {
+                    for (k, v) in pairs_b {
+                        pairs_a.retain(|(existing_k, _)| existing_k != &k);
+                        pairs_a.push((k, v));
+                    }
+                    Ok(Value::Map(pairs_a))
+                }
+                _ => Err(RuntimeError::new("Map.merge: expected two Maps")),
+            }
+        }
+
+        // =====================================================================
+        // Set<T>
+        // =====================================================================
+        "Set.empty" => Ok(Value::Set(vec![])),
+        "Set.size" => {
+            let v = one(args, "Set.size")?;
+            match v {
+                Value::Set(items) => Ok(Value::Int(items.len() as i64)),
+                _ => Err(RuntimeError::new("Set.size: expected Set")),
+            }
+        }
+        "Set.insert" => {
+            let (set, item) = two(args, "Set.insert")?;
+            match set {
+                Value::Set(mut items) => {
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                    Ok(Value::Set(items))
+                }
+                _ => Err(RuntimeError::new("Set.insert: expected Set")),
+            }
+        }
+        "Set.contains" => {
+            let (set, item) = two(args, "Set.contains")?;
+            match set {
+                Value::Set(items) => Ok(Value::Bool(items.contains(&item))),
+                _ => Err(RuntimeError::new("Set.contains: expected Set")),
+            }
+        }
+        "Set.remove" => {
+            let (set, item) = two(args, "Set.remove")?;
+            match set {
+                Value::Set(mut items) => {
+                    items.retain(|x| x != &item);
+                    Ok(Value::Set(items))
+                }
+                _ => Err(RuntimeError::new("Set.remove: expected Set")),
+            }
+        }
+        "Set.toList" => {
+            let v = one(args, "Set.toList")?;
+            match v {
+                Value::Set(items) => Ok(Value::List(items)),
+                _ => Err(RuntimeError::new("Set.toList: expected Set")),
+            }
+        }
+        "Set.fromList" => {
+            let v = one(args, "Set.fromList")?;
+            match v {
+                Value::List(items) => {
+                    let mut unique = Vec::new();
+                    for item in items {
+                        if !unique.contains(&item) {
+                            unique.push(item);
+                        }
+                    }
+                    Ok(Value::Set(unique))
+                }
+                _ => Err(RuntimeError::new("Set.fromList: expected List")),
+            }
+        }
+        "Set.union" => {
+            let (a, b) = two(args, "Set.union")?;
+            match (a, b) {
+                (Value::Set(mut items_a), Value::Set(items_b)) => {
+                    for item in items_b {
+                        if !items_a.contains(&item) {
+                            items_a.push(item);
+                        }
+                    }
+                    Ok(Value::Set(items_a))
+                }
+                _ => Err(RuntimeError::new("Set.union: expected two Sets")),
+            }
+        }
+        "Set.intersect" => {
+            let (a, b) = two(args, "Set.intersect")?;
+            match (a, b) {
+                (Value::Set(items_a), Value::Set(items_b)) => {
+                    let result = items_a.into_iter().filter(|x| items_b.contains(x)).collect();
+                    Ok(Value::Set(result))
+                }
+                _ => Err(RuntimeError::new("Set.intersect: expected two Sets")),
+            }
+        }
+        "Set.difference" => {
+            let (a, b) = two(args, "Set.difference")?;
+            match (a, b) {
+                (Value::Set(items_a), Value::Set(items_b)) => {
+                    let result = items_a.into_iter().filter(|x| !items_b.contains(x)).collect();
+                    Ok(Value::Set(result))
+                }
+                _ => Err(RuntimeError::new("Set.difference: expected two Sets")),
+            }
+        }
+
+        // =====================================================================
+        // Env
+        // =====================================================================
+        "Env.get" => {
+            let v = one(args, "Env.get")?;
+            match v {
+                Value::Str(key) => match std::env::var(&key) {
+                    Ok(val) => Ok(some(Value::Str(val))),
+                    Err(_) => Ok(none()),
+                },
+                _ => Err(RuntimeError::new("Env.get: expected String key")),
+            }
+        }
+        "Env.require" => {
+            let v = one(args, "Env.require")?;
+            match v {
+                Value::Str(key) => match std::env::var(&key) {
+                    Ok(val) => Ok(ok(Value::Str(val))),
+                    Err(_) => Ok(err(Value::Variant {
+                        name: "Missing".to_string(),
+                        payload: VariantPayload::Record(vec![
+                            ("key".to_string(), Value::Str(key)),
+                        ]),
+                    })),
+                },
+                _ => Err(RuntimeError::new("Env.require: expected String key")),
+            }
+        }
+
+        // =====================================================================
+        // Json
+        // =====================================================================
+        "Json.parse" => {
+            let v = one(args, "Json.parse")?;
+            let text = match v {
+                Value::Str(s) => s,
+                Value::Bytes(b) => String::from_utf8(b)
+                    .map_err(|_| RuntimeError::new("Json.parse: bytes are not valid UTF-8"))?,
+                _ => return Err(RuntimeError::new("Json.parse: expected String or Bytes")),
+            };
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(j) => Ok(ok(json_to_value(j))),
+                Err(e) => Ok(err(Value::Variant {
+                    name: "InvalidJson".to_string(),
+                    payload: VariantPayload::Record(vec![
+                        ("offset".to_string(), Value::Int(e.column() as i64)),
+                    ]),
+                })),
+            }
+        }
+        "Json.serialize" => {
+            let v = one(args, "Json.serialize")?;
+            let j = value_to_json(&v);
+            let s = serde_json::to_string(&j)
+                .map_err(|e| RuntimeError::new(format!("Json.serialize: {}", e)))?;
+            Ok(Value::Bytes(s.into_bytes()))
+        }
+
+        // =====================================================================
+        // Http / HttpServer / Response (trusted stubs — sync model returns Ok stubs)
+        // =====================================================================
+        "Http.get" | "Http.delete" => {
+            Ok(ok(stub_response(200)))
+        }
+        "Http.post" | "Http.put" | "Http.patch" => {
+            Ok(ok(stub_response(200)))
+        }
+        "HttpServer.start" => {
+            Ok(ok(Value::Unit))
+        }
+        "Response.json" => {
+            let (status, body) = two(args, "Response.json")?;
+            let status_int = match status {
+                Value::Int(n) => n,
+                _ => 200,
+            };
+            let body_bytes = serde_json::to_vec(&value_to_json(&body)).unwrap_or_default();
+            Ok(Value::Record(vec![
+                ("status".to_string(), Value::Int(status_int)),
+                ("body".to_string(), Value::Bytes(body_bytes)),
+            ]))
+        }
+        "Response.err" => {
+            let (status, e) = two(args, "Response.err")?;
+            let status_int = match status {
+                Value::Int(n) => n,
+                _ => 500,
+            };
+            let body_bytes = serde_json::to_vec(&value_to_json(&e)).unwrap_or_default();
+            Ok(Value::Record(vec![
+                ("status".to_string(), Value::Int(status_int)),
+                ("body".to_string(), Value::Bytes(body_bytes)),
+            ]))
+        }
+
+        // =====================================================================
+        // GraphQL (trusted stub)
+        // =====================================================================
+        "GraphQL.execute" | "GraphQL.query" => {
+            Ok(ok(Value::Record(vec![
+                ("data".to_string(), Value::Unit),
+                ("errors".to_string(), Value::List(vec![])),
+            ])))
+        }
+
         _ => Err(RuntimeError::new(format!("unknown stdlib function '{}'", name))),
+    }
+}
+
+// =========================================================================
+// HTTP stub helper
+// =========================================================================
+
+fn stub_response(status: i64) -> Value {
+    Value::Record(vec![
+        ("status".to_string(), Value::Int(status)),
+        ("body".to_string(), Value::Bytes(b"{}".to_vec())),
+    ])
+}
+
+// =========================================================================
+// JSON <-> Value helpers
+// =========================================================================
+
+fn json_to_value(j: serde_json::Value) -> Value {
+    match j {
+        serde_json::Value::Null => Value::Unit,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => Value::Str(s),
+        serde_json::Value::Array(arr) => {
+            Value::List(arr.into_iter().map(json_to_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            Value::Record(map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect())
+        }
+    }
+}
+
+fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Unit => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(n) => serde_json::json!(*n),
+        Value::Float(f) => serde_json::json!(*f),
+        Value::Str(s) => serde_json::Value::String(s.clone()),
+        Value::Bytes(b) => {
+            serde_json::Value::String(String::from_utf8_lossy(b).into_owned())
+        }
+        Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(value_to_json).collect())
+        }
+        Value::Record(fields) => {
+            let obj: serde_json::Map<String, serde_json::Value> =
+                fields.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
+            serde_json::Value::Object(obj)
+        }
+        Value::Map(pairs) => {
+            let obj: serde_json::Map<String, serde_json::Value> = pairs
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let Value::Str(ks) = k {
+                        Some((ks.clone(), value_to_json(v)))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            serde_json::Value::Object(obj)
+        }
+        Value::Variant { name, payload } => {
+            let mut obj = serde_json::Map::new();
+            obj.insert("tag".to_string(), serde_json::Value::String(name.clone()));
+            match payload {
+                VariantPayload::Unit => {}
+                VariantPayload::Tuple(inner) => {
+                    obj.insert("value".to_string(), value_to_json(inner));
+                }
+                VariantPayload::Record(fields) => {
+                    for (k, v) in fields {
+                        obj.insert(k.clone(), value_to_json(v));
+                    }
+                }
+            }
+            serde_json::Value::Object(obj)
+        }
+        _ => serde_json::Value::Null,
     }
 }
 

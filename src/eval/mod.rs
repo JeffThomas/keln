@@ -41,6 +41,10 @@ pub enum Value {
     Timestamp(i64),
     /// Completed task result (sync model)
     Task(Box<Value>),
+    /// Ordered key-value map (linear scan; keys compared by PartialEq)
+    Map(Vec<(Value, Value)>),
+    /// Ordered unique set (linear scan; elements compared by PartialEq)
+    Set(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +65,13 @@ impl PartialEq for Value {
             (Value::Unit, Value::Unit) => true,
             (Value::Duration(a), Value::Duration(b)) => a == b,
             (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => {
+                a.len() == b.len()
+                    && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
+            }
+            (Value::Set(a), Value::Set(b)) => {
+                a.len() == b.len() && a.iter().all(|x| b.contains(x))
+            }
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Record(a), Value::Record(b)) => {
                 a.len() == b.len()
@@ -138,6 +149,22 @@ impl fmt::Display for Value {
             Value::Duration(ms) => write!(f, "<duration:{}ms>", ms),
             Value::Timestamp(ms) => write!(f, "<timestamp:{}>", ms),
             Value::Task(v) => write!(f, "<task:{}>", v),
+            Value::Map(pairs) => {
+                write!(f, "Map{{")?;
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}: {}", k, v)?;
+                }
+                write!(f, "}}")
+            }
+            Value::Set(items) => {
+                write!(f, "Set{{")?;
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "}}")
+            }
         }
     }
 }

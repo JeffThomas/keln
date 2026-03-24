@@ -178,8 +178,129 @@ impl TypeEnv {
             target: Type::Named("Timestamp".to_string()),
         });
 
+        // Domain error types
+        self.register_domain_errors();
+
         // Register built-in module methods for stdlib types
         self.register_stdlib_methods();
+    }
+
+    fn register_domain_errors(&mut self) {
+        use super::{VariantDef, VariantPayload};
+        let s = Type::String;
+        let i = Type::Int;
+
+        macro_rules! unit {
+            ($name:expr) => {
+                VariantDef { name: $name.to_string(), payload: VariantPayload::Unit }
+            };
+        }
+        macro_rules! rec {
+            ($name:expr, $($f:expr => $t:expr),+) => {
+                VariantDef {
+                    name: $name.to_string(),
+                    payload: VariantPayload::Record(vec![ $(($f.to_string(), $t)),+ ]),
+                }
+            };
+        }
+
+        // DbError
+        self.register_type("DbError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                unit!("ConnectionFailed"),
+                rec!("QueryFailed", "message" => s.clone()),
+                unit!("NotFound"),
+            ],
+        });
+
+        // HttpError
+        self.register_type("HttpError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("BadRequest", "message" => s.clone()),
+                unit!("Unauthorized"),
+                unit!("NotFound"),
+                rec!("InternalError", "message" => s.clone()),
+            ],
+        });
+
+        // EnvError
+        self.register_type("EnvError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("Missing", "key" => s.clone()),
+                rec!("Invalid", "key" => s.clone(), "reason" => s.clone()),
+            ],
+        });
+
+        // ParseError
+        self.register_type("ParseError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("InvalidJson", "offset" => i.clone()),
+                rec!("UnexpectedField", "name" => s.clone()),
+                rec!("MissingField", "name" => s.clone()),
+            ],
+        });
+
+        // PortError
+        self.register_type("PortError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("OutOfRange", "value" => i.clone()),
+                rec!("NotANumber", "input" => s.clone()),
+            ],
+        });
+
+        // JobError
+        self.register_type("JobError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("ExecutionFailed", "message" => s.clone()),
+                rec!("Timeout", "after" => Type::Named("Duration".to_string())),
+                rec!("MaxRetriesReached", "attempts" => i.clone()),
+                rec!("PayloadInvalid", "reason" => s.clone()),
+            ],
+        });
+
+        // QueueError
+        self.register_type("QueueError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                unit!("Full"),
+                unit!("ConnectionFailed"),
+                rec!("EnqueueFailed", "message" => s.clone()),
+            ],
+        });
+
+        // WorkerError
+        self.register_type("WorkerError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("StartFailed", "message" => s.clone()),
+                rec!("Crashed", "message" => s.clone()),
+                unit!("NotFound"),
+            ],
+        });
+
+        // RetryError
+        self.register_type("RetryError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("MaxAttemptsReached", "attempts" => i.clone()),
+                rec!("Aborted", "reason" => s.clone()),
+            ],
+        });
+
+        // LeaseError
+        self.register_type("LeaseError", TypeDef::Sum {
+            type_params: vec![],
+            variants: vec![
+                rec!("AlreadyClaimed", "job_id" => s.clone()),
+                rec!("LeaseExpired", "job_id" => s.clone()),
+            ],
+        });
     }
 
     fn register_stdlib_methods(&mut self) {

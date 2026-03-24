@@ -972,4 +972,562 @@ fn runAll { IO Unit -> List<Int>
         );
         assert_eq!(result, Ok(Value::Int(99)));
     }
+
+    // =========================================================================
+    // Phase 3 stdlib gaps
+    // =========================================================================
+
+    #[test]
+    fn test_result_unwrap_or_ok() {
+        let result = eval_fn(
+            r#"fn getVal { Pure Unit -> Int
+    in: _
+    out: Result.unwrapOr(Result.ok(7), 0)
+}"#,
+            "getVal",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn test_result_unwrap_or_err() {
+        let result = eval_fn(
+            r#"fn getVal { Pure Unit -> Int
+    in: _
+    out: Result.unwrapOr(Result.err(BadInput), 42)
+}"#,
+            "getVal",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn test_maybe_require_some() {
+        let result = eval_fn(
+            r#"fn check { Pure Unit -> Bool
+    in: _
+    out: Result.isOk(Maybe.require(Maybe.some(5), Missing))
+}"#,
+            "check",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_maybe_require_none() {
+        let result = eval_fn(
+            r#"fn check { Pure Unit -> Bool
+    in: _
+    out: Result.isErr(Maybe.require(Maybe.none(), Missing))
+}"#,
+            "check",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_maybe_unwrap_or() {
+        let result = eval_fn(
+            r#"fn getVal { Pure Unit -> Int
+    in: _
+    out: Maybe.unwrapOr(Maybe.none(), 99)
+}"#,
+            "getVal",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(99)));
+    }
+
+    #[test]
+    fn test_list_fold() {
+        let result = eval_fn(
+            r#"fn sumList { Pure Unit -> Int
+    in: _
+    out: List.fold([1, 2, 3, 4], 0, addPair)
+}
+fn addPair { Pure {acc: Int, item: Int} -> Int
+    in: p
+    out: p.acc + p.item
+}"#,
+            "sumList",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn test_list_repeat() {
+        let result = eval_fn(
+            r#"fn makeList { Pure Unit -> List<Int>
+    in: _
+    out: List.repeat(0, 3)
+}"#,
+            "makeList",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::List(vec![Value::Int(0), Value::Int(0), Value::Int(0)])));
+    }
+
+    #[test]
+    fn test_list_clone() {
+        let result = eval_fn(
+            r#"fn cloneList { Pure Unit -> Int
+    in: _
+    out: do {
+        let xs = [10, 20]
+        let ys = List.clone(xs)
+        List.len(ys)
+    }
+}"#,
+            "cloneList",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_list_sequence_all_ok() {
+        let result = eval_fn(
+            r#"fn seqTest { Pure Unit -> Bool
+    in: _
+    out: Result.isOk(List.sequence([Result.ok(1), Result.ok(2)]))
+}"#,
+            "seqTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_task_await_first() {
+        let result = eval_fn(
+            r#"fn computeA { IO Unit -> Int
+    in: _
+    out: 77
+}
+fn raceTest { IO Unit -> Int
+    in: _
+    out: do {
+        let t1 = Task.spawn(computeA)
+        Task.awaitFirst([t1])
+    }
+}"#,
+            "raceTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(77)));
+    }
+
+    // =========================================================================
+    // Map<K,V>
+    // =========================================================================
+
+    #[test]
+    fn test_map_insert_get() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let m = Map.empty()
+        let m2 = Map.insert(m, {key: 1, value: 100})
+        Maybe.isSome(Map.get(m2, 1))
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_map_get_missing() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let m = Map.empty()
+        match Map.get(m, 999) {
+            Some -> false
+            None -> true
+        }
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_map_contains_remove() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let m = Map.insert(Map.empty(), {key: 42, value: 1})
+        let m2 = Map.remove(m, 42)
+        Map.contains(m2, 42)
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_map_size() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let m = Map.insert(Map.insert(Map.empty(), {key: 1, value: 10}), {key: 2, value: 20})
+        Map.size(m)
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_map_keys_values() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let m = Map.insert(Map.empty(), {key: 7, value: 70})
+        let ks = Map.keys(m)
+        List.len(ks)
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_map_merge() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let m1 = Map.insert(Map.empty(), {key: 1, value: 10})
+        let m2 = Map.insert(Map.empty(), {key: 2, value: 20})
+        Map.size(Map.merge(m1, m2))
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    // =========================================================================
+    // Set<T>
+    // =========================================================================
+
+    #[test]
+    fn test_set_insert_contains() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let s = Set.insert(Set.empty(), 5)
+        Set.contains(s, 5)
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_set_no_duplicates() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let s = Set.insert(Set.insert(Set.empty(), 3), 3)
+        Set.size(s)
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_set_remove() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let s = Set.insert(Set.empty(), 9)
+        let s2 = Set.remove(s, 9)
+        Set.contains(s2, 9)
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_set_from_list() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let s = Set.fromList([1, 2, 2, 3, 3])
+        Set.size(s)
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_set_union() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let a = Set.fromList([1, 2])
+        let b = Set.fromList([2, 3])
+        Set.size(Set.union(a, b))
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_set_intersect() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let a = Set.fromList([1, 2, 3])
+        let b = Set.fromList([2, 3, 4])
+        Set.size(Set.intersect(a, b))
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_set_difference() {
+        let result = eval_fn(
+            r#"fn setTest { Pure Unit -> Int
+    in: _
+    out: do {
+        let a = Set.fromList([1, 2, 3])
+        let b = Set.fromList([2, 3])
+        Set.size(Set.difference(a, b))
+    }
+}"#,
+            "setTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    // =========================================================================
+    // Env module
+    // =========================================================================
+
+    #[test]
+    fn test_env_get_missing() {
+        let result = eval_fn(
+            r#"fn envTest { IO Unit -> Bool
+    in: _
+    out: Maybe.isNone(Env.get("__KELN_NO_SUCH_VAR_XYZ__"))
+}"#,
+            "envTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_env_get_present() {
+        unsafe { std::env::set_var("KELN_TEST_VAR", "hello"); }
+        let result = eval_fn(
+            r#"fn envTest { IO Unit -> Bool
+    in: _
+    out: Maybe.isSome(Env.get("KELN_TEST_VAR"))
+}"#,
+            "envTest",
+            Value::Unit,
+        );
+        unsafe { std::env::remove_var("KELN_TEST_VAR"); }
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_env_require_missing() {
+        let result = eval_fn(
+            r#"fn envTest { IO Unit -> Bool
+    in: _
+    out: Result.isErr(Env.require("__KELN_NO_SUCH_VAR_XYZ__"))
+}"#,
+            "envTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_env_require_present() {
+        unsafe { std::env::set_var("KELN_TEST_VAR2", "world"); }
+        let result = eval_fn(
+            r#"fn envTest { IO Unit -> Bool
+    in: _
+    out: Result.isOk(Env.require("KELN_TEST_VAR2"))
+}"#,
+            "envTest",
+            Value::Unit,
+        );
+        unsafe { std::env::remove_var("KELN_TEST_VAR2"); }
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
+    // Json module
+    // =========================================================================
+
+    #[test]
+    fn test_json_parse_int() {
+        let result = eval_fn(
+            r#"fn jsonTest { Pure Unit -> Bool
+    in: _
+    out: Result.isOk(Json.parse("42"))
+}"#,
+            "jsonTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_json_parse_invalid() {
+        let result = eval_fn(
+            r#"fn jsonTest { Pure Unit -> Bool
+    in: _
+    out: Result.isErr(Json.parse("{bad json"))
+}"#,
+            "jsonTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_json_serialize_roundtrip() {
+        let result = eval_fn(
+            r#"fn jsonTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let bytes = Json.serialize(123)
+        Result.isOk(Json.parse(Bytes.toString(bytes)))
+    }
+}"#,
+            "jsonTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_json_serialize_string() {
+        let result = eval_fn(
+            r#"fn jsonTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let bytes = Json.serialize("hello")
+        let s = Bytes.toString(bytes)
+        String.contains(s, "hello")
+    }
+}"#,
+            "jsonTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
+    // Http / Response stubs
+    // =========================================================================
+
+    #[test]
+    fn test_http_get_returns_ok() {
+        let result = eval_fn(
+            r#"fn httpTest { IO Unit -> Bool
+    in: _
+    out: Result.isOk(Http.get("https://example.com"))
+}"#,
+            "httpTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_http_post_returns_ok() {
+        let result = eval_fn(
+            r#"fn httpTest { IO Unit -> Bool
+    in: _
+    out: Result.isOk(Http.post("https://example.com", "body"))
+}"#,
+            "httpTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_response_json_has_status() {
+        let result = eval_fn(
+            r#"fn respTest { Pure Unit -> Bool
+    in: _
+    out: do {
+        let r = Response.json(200, "ok")
+        r.status == 200
+    }
+}"#,
+            "respTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_graphql_execute_returns_ok() {
+        let result = eval_fn(
+            r#"fn gqlTest { IO Unit -> Bool
+    in: _
+    out: Result.isOk(GraphQL.execute("{ users { id } }"))
+}"#,
+            "gqlTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
 }

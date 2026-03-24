@@ -1,6 +1,27 @@
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
+// Fuzz harness result types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FuzzModuleResult {
+    pub module_name: String,
+    /// None = module has no fuzz block (FuzzCoverageWarning)
+    pub methods: Vec<FuzzMethodResult>,
+    pub has_fuzz_block: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FuzzMethodResult {
+    pub fn_name: String,
+    pub invariant: String,
+    pub iterations: usize,
+    pub passed: bool,
+    pub failure: Option<String>,
+}
+
+// =============================================================================
 // Per-function verify result
 // =============================================================================
 
@@ -70,6 +91,7 @@ pub struct VerificationResult {
     pub test_failures: Vec<TestFailure>,
     pub coverage_gaps: Vec<String>,
     pub proof_violations: Vec<ProofViolation>,
+    pub fuzz_status: Vec<FuzzModuleResult>,
     pub is_clean: bool,
 }
 
@@ -117,6 +139,7 @@ impl VerificationResult {
             test_failures,
             coverage_gaps: vec![],
             proof_violations,
+            fuzz_status: vec![],
             is_clean,
         }
     }

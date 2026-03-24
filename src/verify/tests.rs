@@ -276,4 +276,71 @@ fn dec { Pure Int -> Int
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|r| r.is_clean()), "failures: {:?}", results);
     }
+
+    // =========================================================================
+    // Fuzz harness tests
+    // =========================================================================
+
+    #[test]
+    fn test_fuzz_trusted_module_no_fuzz_block() {
+        let src = r#"trusted module HttpServer {
+    provides: {
+        start: IO Unit -> Unit
+    }
+    reason: "HTTP stack; correctness guaranteed by integration tests"
+}"#;
+        let mut ex = VerifyExecutor::from_source(src).unwrap();
+        let results = ex.fuzz_trusted_modules();
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].has_fuzz_block, "HttpServer has no fuzz block");
+        assert!(results[0].methods.is_empty());
+    }
+
+    #[test]
+    fn test_fuzz_json_parse_returns_result() {
+        let src = r#"trusted module Json {
+    provides: {
+        parse:     Pure String -> Unit
+        serialize: Pure String -> Unit
+    }
+    reason: "correctness guaranteed by external test suite"
+    fuzz: {
+        parse: inputs(String) -> returns_result
+        serialize: inputs(String) -> crashes_never
+    }
+}"#;
+        let mut ex = VerifyExecutor::from_source(src).unwrap();
+        let results = ex.fuzz_trusted_modules();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].has_fuzz_block);
+        assert_eq!(results[0].methods.len(), 2);
+
+        let parse_result = &results[0].methods[0];
+        assert_eq!(parse_result.fn_name, "parse");
+        assert!(parse_result.passed, "Json.parse fuzz failed: {:?}", parse_result.failure);
+
+        let ser_result = &results[0].methods[1];
+        assert_eq!(ser_result.fn_name, "serialize");
+        assert!(ser_result.passed, "Json.serialize fuzz failed: {:?}", ser_result.failure);
+    }
+
+    #[test]
+    fn test_fuzz_result_in_verification_result_json() {
+        let src = r#"trusted module Json {
+    provides: {
+        parse: Pure String -> Unit
+    }
+    reason: "test"
+    fuzz: {
+        parse: inputs(String) -> returns_result
+    }
+}"#;
+        let mut ex = VerifyExecutor::from_source(src).unwrap();
+        let fn_results = ex.verify_all();
+        let mut vr = crate::verify::result::VerificationResult::from_fn_results(&fn_results);
+        vr.fuzz_status = ex.fuzz_trusted_modules();
+        let json = vr.to_json();
+        assert!(json.contains("fuzz_status"), "fuzz_status should appear in JSON");
+        assert!(json.contains("Json"), "module name should appear in JSON");
+    }
 }

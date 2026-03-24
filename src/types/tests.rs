@@ -415,4 +415,37 @@ fn bad {
     out: Channel.new<Int>()
 }"#, "Channel.new requires IO");
     }
+
+    // =========================================================================
+    // Domain error types — built-in pre-registration
+    // =========================================================================
+
+    #[test]
+    fn test_domain_errors_are_known_types() {
+        use crate::types::check_source;
+        for type_name in &[
+            "DbError", "HttpError", "EnvError", "ParseError",
+            "PortError", "JobError", "QueueError", "WorkerError",
+            "RetryError", "LeaseError",
+        ] {
+            let errors = check_source(&format!(
+                "fn useError {{ Pure Unit -> {0}\n    in: _\n    out: ConnectionFailed\n}}",
+                type_name
+            )).unwrap_or_default();
+            let has_unknown_type = errors.iter().any(|e| e.message.contains("unknown type"));
+            assert!(!has_unknown_type, "{} should be a known builtin type", type_name);
+        }
+    }
+
+    #[test]
+    fn test_env_error_variants_resolve() {
+        use crate::types::check_source;
+        let errors = check_source(r#"fn handleEnv {
+    IO Unit -> EnvError
+    in: _
+    out: Missing
+}"#).unwrap_or_default();
+        let has_type_error = errors.iter().any(|e| e.message.contains("unknown type"));
+        assert!(!has_type_error, "EnvError variants should resolve without unknown-type errors");
+    }
 }
