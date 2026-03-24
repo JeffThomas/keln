@@ -733,19 +733,12 @@ pub fn dispatch(
                 Value::PartialFn { name, bound } => ev.call_fn(name, Value::Record(bound.clone()))?,
                 _ => v.clone(),
             };
-            Ok(Value::Variant {
-                name: "Task".to_string(),
-                payload: VariantPayload::Tuple(Box::new(result)),
-            })
+            Ok(Value::Task(Box::new(result)))
         }
         "Task.await" => {
             let v = one(args, "Task.await")?;
             match v {
-                Value::Variant { name, payload: VariantPayload::Tuple(inner) }
-                    if name == "Task" =>
-                {
-                    Ok(*inner)
-                }
+                Value::Task(inner) => Ok(*inner),
                 other => Ok(other),
             }
         }
@@ -756,11 +749,7 @@ pub fn dispatch(
                     tasks
                         .into_iter()
                         .map(|t| match t {
-                            Value::Variant { name, payload: VariantPayload::Tuple(inner) }
-                                if name == "Task" =>
-                            {
-                                *inner
-                            }
+                            Value::Task(inner) => *inner,
                             other => other,
                         })
                         .collect(),
