@@ -412,6 +412,75 @@ fn process { Pure Int -> Int
     }
 
     // =========================================================================
+    // Compact helper function scoping
+    // =========================================================================
+
+    #[test]
+    fn test_compact_helper_same_input_type() {
+        let result = eval_fn(
+            r#"fn doubled { Pure Int -> Int
+    in: n
+    out: twice(n)
+    helpers: {
+        twice :: Pure Int -> Int => it + it
+    }
+}"#,
+            "doubled",
+            Value::Int(7),
+        );
+        assert_eq!(result, Ok(Value::Int(14)));
+    }
+
+    #[test]
+    fn test_compact_helper_different_input_type() {
+        let result = eval_fn(
+            r#"fn summarize { Pure String -> Int
+    in: s
+    out: doubled(String.len(s))
+    helpers: {
+        doubled :: Pure Int -> Int => it + it
+    }
+}"#,
+            "summarize",
+            Value::Str("hello".to_string()),
+        );
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn test_compact_helper_returns_bool() {
+        let result = eval_fn(
+            r#"fn check { Pure Int -> Bool
+    in: n
+    out: isPositive(n)
+    helpers: {
+        isPositive :: Pure Int -> Bool => it > 0
+    }
+}"#,
+            "check",
+            Value::Int(5),
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_compact_helper_chained() {
+        let result = eval_fn(
+            r#"fn process { Pure Int -> Int
+    in: n
+    out: addTwo(triple(n))
+    helpers: {
+        triple :: Pure Int -> Int => it * 3
+        addTwo :: Pure Int -> Int => it + 2
+    }
+}"#,
+            "process",
+            Value::Int(4),
+        );
+        assert_eq!(result, Ok(Value::Int(14)));
+    }
+
+    // =========================================================================
     // Refinement constraint checks (item 10)
     // =========================================================================
 

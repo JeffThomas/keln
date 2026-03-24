@@ -60,7 +60,7 @@ impl Evaluator {
                                 output_type: output_type.clone(),
                                 span: span.clone(),
                             },
-                            in_clause: ast::Pattern::Binding("_in".to_string(), span.clone()),
+                            in_clause: ast::Pattern::Binding("it".to_string(), span.clone()),
                             out_clause: body.clone(),
                             confidence: None,
                             reason: None,

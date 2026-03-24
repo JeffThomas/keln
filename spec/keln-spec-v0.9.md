@@ -657,9 +657,12 @@ See section 1.1.
 Named, scoped to their parent, can carry `verify` blocks. Invisible outside
 parent. Two forms: compact (single expression, auto confidence) and full.
 
+Compact helpers expose their input as the implicit binding `it`. Full helpers
+declare their own `in:` clause as normal.
+
 ```keln
 helpers: {
-    trimName :: Pure User -> User => User.setName(u, String.trim(u.name))
+    trimName :: Pure User -> User => User.setName(it, String.trim(it.name))
 
     fn validateEmail {
         Pure User -> Result<User, ValidationError>
@@ -672,6 +675,9 @@ helpers: {
     }
 }
 ```
+
+Each compact helper carries its own declared `effects`, `input_type`, and
+`output_type` — independent of the parent function's signature.
 
 `promote: threshold(N)` hints for toolchain-driven promotion.
 Deep nesting (4+ levels) is the signal to extract named functions and use
@@ -1357,7 +1363,7 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] Clock effect and mock support (module mock dispatch)
 - [x] Channel and task primitives; `Channel.new<T>()`, `Task.spawn` FunctionRef invocation (sync model)
 - [x] Refinement constraint evaluator (runtime enforcement): Range, Comparison, Length at construction time (8 tests)
-- [ ] Helper function scoping
+- [x] Helper function scoping: compact helpers use own declared signature; implicit input binding `it` (4 tests)
 - [ ] Clone operation
 - [ ] Structural fingerprint computation
 - [ ] Log, Float, Timestamp arithmetic modules
