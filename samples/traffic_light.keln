@@ -36,10 +36,12 @@ fn cycleN {
         _ -> cycleN({ light: nextLight(ctx.light), n: ctx.n - 1 })
     }
 
+    confidence: auto
+
     verify: {
-        given({ light: Red, n: 3 }) -> Red
-        given({ light: Green, n: 1 }) -> Yellow
-        given({ light: Yellow, n: 2 }) -> Yellow
+        given({ light: Red, n: 3 })    -> Red
+        given({ light: Green, n: 1 })  -> Yellow
+        given({ light: Yellow, n: 2 }) -> Green
     }
 }
 
