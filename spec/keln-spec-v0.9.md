@@ -1199,6 +1199,8 @@ Float.fromInt  { Pure Int                       -> Float          }
 Float.compare  { Pure Float, Float              -> Ordering       }
 Float.approxEq { Pure Float, Float, Float       -> Bool           }
 -- approxEq(a, b, epsilon) = |a - b| < epsilon
+Float.parse    { Pure String                    -> Result<Float, String> }
+-- parse(s) = Ok(f) if s is a valid decimal float; Err("not a float: ...") otherwise
 ```
 
 ### 12.7 Logging
@@ -1218,14 +1220,22 @@ trusted module Log {
 ### 12.8 String, Bytes, Int, and IO
 
 ```keln
-String.trim      { Pure String               -> String         }
-String.lowercase { Pure String               -> String         }
-String.uppercase { Pure String               -> String         }
-String.split     { Pure String, String       -> List<String>   }
-String.join      { Pure List<String>, String -> String         }
-String.length    { Pure String               -> Int            }
-String.contains  { Pure String, String       -> Bool           }
-String.toString  { Pure T                    -> String         }
+String.trim      { Pure String                    -> String              }
+String.trimStart { Pure String                    -> String              }
+String.trimEnd   { Pure String                    -> String              }
+String.lowercase { Pure String                    -> String              }
+String.uppercase { Pure String                    -> String              }
+String.split     { Pure String, String            -> List<String>        }
+String.join      { Pure List<String>, String      -> String              }
+String.chars     { Pure String                    -> List<String>        }
+-- chars(s) yields a list of single-character strings
+String.indexOf   { Pure String, String            -> Maybe<Int>          }
+-- indexOf(s, sub) = Some(i) for the first char-index of sub; None if absent
+String.replace   { Pure String, String, String    -> String              }
+-- replace(s, from, to) replaces all non-overlapping occurrences of from with to
+String.length    { Pure String                    -> Int                 }
+String.contains  { Pure String, String            -> Bool                }
+String.toString  { Pure T                         -> String              }
 
 Int.min          { Pure Int, Int             -> Int            }
 Int.max          { Pure Int, Int             -> Int            }

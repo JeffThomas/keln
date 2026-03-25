@@ -60,6 +60,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Float.abs"
             | "Float.floor"
             | "Float.ceil"
+            | "Float.parse"
             | "String.len"
             | "String.length"
             | "String.trim"
@@ -74,6 +75,11 @@ pub fn is_stdlib(name: &str) -> bool {
             | "String.split"
             | "String.join"
             | "String.isEmpty"
+            | "String.trimStart"
+            | "String.trimEnd"
+            | "String.chars"
+            | "String.indexOf"
+            | "String.replace"
             | "Bytes.len"
             | "Bytes.empty"
             | "Bytes.fromString"
@@ -696,6 +702,16 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("Float.ceil: expected Float")),
             }
         }
+        "Float.parse" => {
+            let v = one(args, "Float.parse")?;
+            match v {
+                Value::Str(s) => match s.trim().parse::<f64>() {
+                    Ok(f) => Ok(ok(Value::Float(f))),
+                    Err(_) => Ok(err(Value::Str(format!("not a float: {}", s)))),
+                },
+                _ => Err(RuntimeError::new("Float.parse: expected String")),
+            }
+        }
 
         // =====================================================================
         // String
@@ -795,6 +811,53 @@ pub fn dispatch(
                         .collect(),
                 )),
                 _ => Err(RuntimeError::new("String.split: expected String, String")),
+            }
+        }
+        "String.trimStart" => {
+            let v = one(args, "String.trimStart")?;
+            match v {
+                Value::Str(s) => Ok(Value::Str(s.trim_start().to_string())),
+                _ => Err(RuntimeError::new("String.trimStart: expected String")),
+            }
+        }
+        "String.trimEnd" => {
+            let v = one(args, "String.trimEnd")?;
+            match v {
+                Value::Str(s) => Ok(Value::Str(s.trim_end().to_string())),
+                _ => Err(RuntimeError::new("String.trimEnd: expected String")),
+            }
+        }
+        "String.chars" => {
+            let v = one(args, "String.chars")?;
+            match v {
+                Value::Str(s) => Ok(Value::List(
+                    s.chars().map(|c| Value::Str(c.to_string())).collect(),
+                )),
+                _ => Err(RuntimeError::new("String.chars: expected String")),
+            }
+        }
+        "String.indexOf" => {
+            let (s, sub) = two(args, "String.indexOf")?;
+            match (s, sub) {
+                (Value::Str(s), Value::Str(sub)) => {
+                    let result = s.find(sub.as_str()).map(|byte_pos| {
+                        s[..byte_pos].chars().count() as i64
+                    });
+                    match result {
+                        Some(i) => Ok(some(Value::Int(i))),
+                        None    => Ok(none()),
+                    }
+                }
+                _ => Err(RuntimeError::new("String.indexOf: expected String, String")),
+            }
+        }
+        "String.replace" => {
+            let (s, from, to) = three(args, "String.replace")?;
+            match (s, from, to) {
+                (Value::Str(s), Value::Str(from), Value::Str(to)) => {
+                    Ok(Value::Str(s.replace(from.as_str(), to.as_str())))
+                }
+                _ => Err(RuntimeError::new("String.replace: expected String, String, String")),
             }
         }
         "String.join" => {
