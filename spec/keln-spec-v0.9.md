@@ -1379,18 +1379,18 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] Log, Float, Timestamp arithmetic modules: Log.{debug,info,warn,error}, Float complete, Int.{toFloat,pow}, Duration, Timestamp, Clock.{now,since,after,sleep} (22 tests)
 
 ### Phase 3 — Standard library (Rust)
-- [ ] Result<T,E>, Maybe
-- [ ] List (range, repeat, all combinators)
-- [ ] Map, Set
-- [ ] Task, Channel
-- [ ] String, Bytes, Int, Float (complete)
-- [ ] Duration, Timestamp (complete arithmetic, unchecked sub), Clock
-- [ ] Ordering type
-- [ ] Log module
-- [ ] JSON, HTTP (trusted) — with fuzz harness
-- [ ] GraphQL execution engine (trusted) — with fuzz harness
-- [ ] Env and configuration
-- [ ] Domain error types: DbError, HttpError, EnvError, ParseError,
+- [x] Result<T,E>, Maybe
+- [x] List (range, repeat, all combinators)
+- [x] Map, Set
+- [x] Task, Channel (sync stubs; full async in Phase 4)
+- [x] String, Bytes, Int, Float (complete; spec names String.lowercase/uppercase and JSON.* aliased)
+- [x] Duration, Timestamp (complete arithmetic, unchecked sub), Clock
+- [x] Ordering type (LessThan | Equal | GreaterThan)
+- [x] Log module
+- [x] JSON (complete), HTTP (trusted stubs) — fuzz harness pending
+- [x] GraphQL execution engine (trusted stub) — fuzz harness pending
+- [x] Env and configuration
+- [x] Domain error types: DbError, HttpError, EnvError, ParseError,
        PortError, JobError, QueueError, WorkerError, RetryError, LeaseError
 - [ ] Fuzz harness: stratified sampler feeding trusted module `fuzz` blocks
 - [ ] `FuzzResult` emitter integrated into `VerificationResult`

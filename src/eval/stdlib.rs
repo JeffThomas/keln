@@ -69,7 +69,9 @@ pub fn is_stdlib(name: &str) -> bool {
             | "String.startsWith"
             | "String.endsWith"
             | "String.toLower"
+            | "String.lowercase"
             | "String.toUpper"
+            | "String.uppercase"
             | "String.fromInt"
             | "String.slice"
             | "String.split"
@@ -80,6 +82,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "String.chars"
             | "String.indexOf"
             | "String.replace"
+            | "String.toString"
             | "Bytes.len"
             | "Bytes.empty"
             | "Bytes.fromString"
@@ -150,7 +153,9 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Env.get"
             | "Env.require"
             | "Json.parse"
+            | "JSON.parse"
             | "Json.serialize"
+            | "JSON.serialize"
             | "Http.get"
             | "Http.post"
             | "Http.put"
@@ -765,18 +770,25 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("String.endsWith: expected two Strings")),
             }
         }
-        "String.toLower" => {
-            let v = one(args, "String.toLower")?;
+        "String.toLower" | "String.lowercase" => {
+            let v = one(args, name)?;
             match v {
                 Value::Str(s) => Ok(Value::Str(s.to_lowercase())),
                 _ => Err(RuntimeError::new("String.toLower: expected String")),
             }
         }
-        "String.toUpper" => {
-            let v = one(args, "String.toUpper")?;
+        "String.toUpper" | "String.uppercase" => {
+            let v = one(args, name)?;
             match v {
                 Value::Str(s) => Ok(Value::Str(s.to_uppercase())),
                 _ => Err(RuntimeError::new("String.toUpper: expected String")),
+            }
+        }
+        "String.toString" => {
+            let v = one(args, "String.toString")?;
+            match v {
+                Value::Str(s) => Ok(Value::Str(s)),
+                _ => Err(RuntimeError::new("String.toString: expected String")),
             }
         }
         "String.fromInt" => {
@@ -1460,7 +1472,7 @@ pub fn dispatch(
         // =====================================================================
         // Json
         // =====================================================================
-        "Json.parse" => {
+        "Json.parse" | "JSON.parse" => {
             let v = one(args, "Json.parse")?;
             let text = match v {
                 Value::Str(s) => s,
@@ -1478,7 +1490,7 @@ pub fn dispatch(
                 })),
             }
         }
-        "Json.serialize" => {
+        "Json.serialize" | "JSON.serialize" => {
             let v = one(args, "Json.serialize")?;
             let j = value_to_json(&v);
             let s = serde_json::to_string(&j)
