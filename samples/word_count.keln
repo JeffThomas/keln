@@ -12,12 +12,28 @@ fn increment {
         let current = Maybe.getOr(Map.get(ctx.counts, ctx.word), 0)
         Map.insert(ctx.counts, ctx.word, current + 1)
     }
+
+    confidence: auto
+
+    verify: {
+        given({ counts: Map.empty(), word: "hi" }) -> Map.insert(Map.empty(), "hi", 1)
+        given({ counts: Map.insert(Map.empty(), "hi", 4), word: "hi" }) -> Map.insert(Map.empty(), "hi", 5)
+    }
 }
 
 fn countWords {
     Pure List<String> -> Map<String, Int>
     in: words
     out: countHelper({ counts: Map.empty(), words: words })
+
+    confidence: auto
+
+    verify: {
+        given([])                  -> Map.empty()
+        given(["a", "a", "a"])     -> Map.insert(Map.empty(), "a", 3)
+        given(["the", "the"])      -> Map.insert(Map.empty(), "the", 2)
+    }
+
     helpers: {
         countHelper :: Pure { counts: Map<String, Int>, words: List<String> } -> Map<String, Int> =>
             match List.isEmpty(it.words) {
@@ -35,6 +51,15 @@ fn totalWords {
     Pure Map<String, Int> -> Int
     in: counts
     out: List.fold(Map.values(counts), 0, addPair)
+
+    confidence: auto
+
+    verify: {
+        given(Map.empty())                                       -> 0
+        given(Map.insert(Map.empty(), "a", 3))                   -> 3
+        given(Map.insert(Map.insert(Map.empty(), "a", 2), "b", 3)) -> 5
+    }
+
     helpers: {
         addPair :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
     }
@@ -48,6 +73,15 @@ fn topCount {
         let vals = Map.values(counts)
         List.fold(vals, 0, maxPair)
     }
+
+    confidence: auto
+
+    verify: {
+        given([])                            -> 0
+        given(["a", "b", "a"])               -> 2
+        given(["a", "b", "a", "a", "b", "c"]) -> 3
+    }
+
     helpers: {
         maxPair :: Pure { acc: Int, item: Int } -> Int =>
             match it.item > it.acc {
