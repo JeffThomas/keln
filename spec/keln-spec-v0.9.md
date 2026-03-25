@@ -1387,13 +1387,13 @@ lease-based durable queue. 6 minor gaps resolved in v0.9.
 - [x] Duration, Timestamp (complete arithmetic, unchecked sub), Clock
 - [x] Ordering type (LessThan | Equal | GreaterThan)
 - [x] Log module
-- [x] JSON (complete), HTTP (trusted stubs) — fuzz harness pending
-- [x] GraphQL execution engine (trusted stub) — fuzz harness pending
+- [x] JSON (complete), HTTP (trusted stubs)
+- [x] GraphQL execution engine (trusted stub)
 - [x] Env and configuration
 - [x] Domain error types: DbError, HttpError, EnvError, ParseError,
        PortError, JobError, QueueError, WorkerError, RetryError, LeaseError
-- [ ] Fuzz harness: stratified sampler feeding trusted module `fuzz` blocks
-- [ ] `FuzzResult` emitter integrated into `VerificationResult`
+- [x] Fuzz harness: stratified sampler feeding trusted module `fuzz` blocks
+- [x] `FuzzResult` emitter integrated into `VerificationResult`
 
 ### Phase 4 — Bytecode VM
 - [ ] Lower typed AST to bytecode IR
