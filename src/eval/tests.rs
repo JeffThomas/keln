@@ -1133,7 +1133,7 @@ fn raceTest { IO Unit -> Int
     in: _
     out: do {
         let m = Map.empty()
-        let m2 = Map.insert(m, {key: 1, value: 100})
+        let m2 = Map.insert(m, 1, 100)
         Maybe.isSome(Map.get(m2, 1))
     }
 }"#,
@@ -1168,7 +1168,7 @@ fn raceTest { IO Unit -> Int
             r#"fn mapTest { Pure Unit -> Bool
     in: _
     out: do {
-        let m = Map.insert(Map.empty(), {key: 42, value: 1})
+        let m = Map.insert(Map.empty(), 42, 1)
         let m2 = Map.remove(m, 42)
         Map.contains(m2, 42)
     }
@@ -1185,7 +1185,7 @@ fn raceTest { IO Unit -> Int
             r#"fn mapTest { Pure Unit -> Int
     in: _
     out: do {
-        let m = Map.insert(Map.insert(Map.empty(), {key: 1, value: 10}), {key: 2, value: 20})
+        let m = Map.insert(Map.insert(Map.empty(), 1, 10), 2, 20)
         Map.size(m)
     }
 }"#,
@@ -1201,7 +1201,7 @@ fn raceTest { IO Unit -> Int
             r#"fn mapTest { Pure Unit -> Int
     in: _
     out: do {
-        let m = Map.insert(Map.empty(), {key: 7, value: 70})
+        let m = Map.insert(Map.empty(), 7, 70)
         let ks = Map.keys(m)
         List.len(ks)
     }
@@ -1218,8 +1218,8 @@ fn raceTest { IO Unit -> Int
             r#"fn mapTest { Pure Unit -> Int
     in: _
     out: do {
-        let m1 = Map.insert(Map.empty(), {key: 1, value: 10})
-        let m2 = Map.insert(Map.empty(), {key: 2, value: 20})
+        let m1 = Map.insert(Map.empty(), 1, 10)
+        let m2 = Map.insert(Map.empty(), 2, 20)
         Map.size(Map.merge(m1, m2))
     }
 }"#,

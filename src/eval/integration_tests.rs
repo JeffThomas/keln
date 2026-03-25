@@ -1,0 +1,648 @@
+#[cfg(test)]
+mod integration {
+    use crate::eval::{eval_fn, Value, VariantPayload};
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    fn ok(v: Value) -> Value {
+        Value::Variant { name: "Ok".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
+    }
+    fn err(v: Value) -> Value {
+        Value::Variant { name: "Err".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
+    }
+    fn some(v: Value) -> Value {
+        Value::Variant { name: "Some".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
+    }
+    fn none() -> Value {
+        Value::Variant { name: "None".to_string(), payload: VariantPayload::Unit }
+    }
+    fn unit_variant(name: &str) -> Value {
+        Value::Variant { name: name.to_string(), payload: VariantPayload::Unit }
+    }
+    fn rec(fields: Vec<(&str, Value)>) -> Value {
+        Value::Record(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    }
+
+    // =========================================================================
+    // 1. Fibonacci — recursive function, integer literal patterns
+    // =========================================================================
+
+    const FIB_SRC: &str = r#"
+fn fib {
+    Pure Int -> Int
+    in: n
+    out: match n {
+        0 -> 0
+        1 -> 1
+        _ -> fib(n - 1) + fib(n - 2)
+    }
+    verify: {
+        given(0) -> 0
+        given(1) -> 1
+        given(7) -> 13
+        forall(n: Int where 1..8) -> fib(n) >= 1
+    }
+}
+"#;
+
+    #[test]
+    fn test_fib_base_cases() {
+        assert_eq!(eval_fn(FIB_SRC, "fib", Value::Int(0)), Ok(Value::Int(0)));
+        assert_eq!(eval_fn(FIB_SRC, "fib", Value::Int(1)), Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_fib_recursive() {
+        assert_eq!(eval_fn(FIB_SRC, "fib", Value::Int(7)), Ok(Value::Int(13)));
+        assert_eq!(eval_fn(FIB_SRC, "fib", Value::Int(10)), Ok(Value::Int(55)));
+    }
+
+    // =========================================================================
+    // 2. parsePort — spec canonical example, Result + record variant
+    // =========================================================================
+
+    const PARSE_PORT_SRC: &str = r#"
+type PortError =
+    | OutOfRange { value: Int }
+    | NotANumber { input: String }
+
+fn inRange {
+    Pure Int -> Bool
+    in: n
+    out: Bool.and(n >= 1, n <= 65535)
+}
+
+fn parsePort {
+    Pure String -> Result<Int, PortError>
+    in: s
+    out: match Int.parse(s) {
+        Ok(n) -> match inRange(n) {
+            true  -> Result.ok(n)
+            false -> Result.err(OutOfRange { value: n })
+        }
+        Err(_) -> Result.err(NotANumber { input: s })
+    }
+    verify: {
+        given("8080")  -> Ok(8080)
+        given("0")     -> Err(OutOfRange { value: 0 })
+        given("65535") -> Ok(65535)
+        given("abc")   -> Err(NotANumber { input: "abc" })
+    }
+}
+"#;
+
+    #[test]
+    fn test_parse_port_valid() {
+        assert_eq!(eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("8080".into())), Ok(ok(Value::Int(8080))));
+        assert_eq!(eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("65535".into())), Ok(ok(Value::Int(65535))));
+        assert_eq!(eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("1".into())), Ok(ok(Value::Int(1))));
+    }
+
+    #[test]
+    fn test_parse_port_out_of_range() {
+        let result = eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("0".into()));
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+        let result2 = eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("65536".into()));
+        assert!(matches!(result2, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    #[test]
+    fn test_parse_port_not_a_number() {
+        let result = eval_fn(PARSE_PORT_SRC, "parsePort", Value::Str("abc".into()));
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    // =========================================================================
+    // 3. Traffic light state machine — unit variants, exhaustive match
+    // =========================================================================
+
+    const TRAFFIC_SRC: &str = r#"
+type TrafficLight = Red | Yellow | Green
+
+fn nextLight {
+    Pure TrafficLight -> TrafficLight
+    in: light
+    out: match light {
+        Red    -> Green
+        Yellow -> Red
+        Green  -> Yellow
+    }
+    verify: {
+        given(Red)    -> Green
+        given(Yellow) -> Red
+        given(Green)  -> Yellow
+    }
+}
+
+fn cycleN {
+    Pure { light: TrafficLight, n: Int } -> TrafficLight
+    in: ctx
+    out: match ctx.n {
+        0 -> ctx.light
+        _ -> cycleN({ light: nextLight(ctx.light), n: ctx.n - 1 })
+    }
+}
+"#;
+
+    #[test]
+    fn test_traffic_light_transitions() {
+        assert_eq!(
+            eval_fn(TRAFFIC_SRC, "nextLight", unit_variant("Red")),
+            Ok(unit_variant("Green"))
+        );
+        assert_eq!(
+            eval_fn(TRAFFIC_SRC, "nextLight", unit_variant("Yellow")),
+            Ok(unit_variant("Red"))
+        );
+        assert_eq!(
+            eval_fn(TRAFFIC_SRC, "nextLight", unit_variant("Green")),
+            Ok(unit_variant("Yellow"))
+        );
+    }
+
+    #[test]
+    fn test_traffic_light_cycle() {
+        let input = rec(vec![("light", unit_variant("Red")), ("n", Value::Int(3))]);
+        assert_eq!(
+            eval_fn(TRAFFIC_SRC, "cycleN", input),
+            Ok(unit_variant("Red"))
+        );
+    }
+
+    // =========================================================================
+    // 4. Safe arithmetic — Result chaining in do blocks
+    // =========================================================================
+
+    const SAFE_MATH_SRC: &str = r#"
+fn safeDivide {
+    Pure { a: Int, b: Int } -> Result<Int, String>
+    in: ctx
+    out: match ctx.b == 0 {
+        true  -> Result.err("division by zero")
+        false -> Result.ok(ctx.a / ctx.b)
+    }
+}
+
+fn safeNested {
+    Pure { a: Int, b: Int, c: Int } -> Result<Int, String>
+    in: ctx
+    out: do {
+        let ab = safeDivide({ a: ctx.a, b: ctx.b })
+        let result = match ab {
+            Ok(n)  -> safeDivide({ a: n, b: ctx.c })
+            Err(e) -> Err(e)
+        }
+        result
+    }
+}
+"#;
+
+    #[test]
+    fn test_safe_divide_ok() {
+        assert_eq!(
+            eval_fn(SAFE_MATH_SRC, "safeDivide", rec(vec![("a", Value::Int(10)), ("b", Value::Int(2))])),
+            Ok(ok(Value::Int(5)))
+        );
+    }
+
+    #[test]
+    fn test_safe_divide_by_zero() {
+        let result = eval_fn(SAFE_MATH_SRC, "safeDivide", rec(vec![("a", Value::Int(10)), ("b", Value::Int(0))]));
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    #[test]
+    fn test_safe_nested_ok() {
+        let input = rec(vec![("a", Value::Int(100)), ("b", Value::Int(5)), ("c", Value::Int(4))]);
+        assert_eq!(eval_fn(SAFE_MATH_SRC, "safeNested", input), Ok(ok(Value::Int(5))));
+    }
+
+    #[test]
+    fn test_safe_nested_first_err_propagates() {
+        let input = rec(vec![("a", Value::Int(100)), ("b", Value::Int(0)), ("c", Value::Int(4))]);
+        let result = eval_fn(SAFE_MATH_SRC, "safeNested", input);
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    // =========================================================================
+    // 5. Helper functions — compact helper block
+    // =========================================================================
+
+    const HELPERS_SRC: &str = r#"
+fn processInts {
+    Pure { a: Int, b: Int } -> Int
+    in: ctx
+    out: doubled(ctx.a) + tripled(ctx.b)
+    helpers: {
+        doubled :: Pure Int -> Int => it * 2
+        tripled :: Pure Int -> Int => it * 3
+    }
+}
+"#;
+
+    #[test]
+    fn test_compact_helpers() {
+        let input = rec(vec![("a", Value::Int(4)), ("b", Value::Int(3))]);
+        assert_eq!(eval_fn(HELPERS_SRC, "processInts", input), Ok(Value::Int(17)));
+    }
+
+    // =========================================================================
+    // 6. List fold — user-defined accumulator, multi-function program
+    // =========================================================================
+
+    const LIST_FOLD_SRC: &str = r#"
+fn addPair {
+    Pure { acc: Int, item: Int } -> Int
+    in: ctx
+    out: ctx.acc + ctx.item
+}
+
+fn sumList {
+    Pure List<Int> -> Int
+    in: xs
+    out: List.fold(xs, 0, addPair)
+}
+
+fn productList {
+    Pure List<Int> -> Int
+    in: xs
+    out: List.fold(xs, 1, mulPair)
+    helpers: {
+        mulPair :: Pure { acc: Int, item: Int } -> Int => it.acc * it.item
+    }
+}
+"#;
+
+    #[test]
+    fn test_sum_list() {
+        let xs = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", xs), Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn test_sum_list_empty() {
+        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", Value::List(vec![])), Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_product_list() {
+        let xs = Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
+        assert_eq!(eval_fn(LIST_FOLD_SRC, "productList", xs), Ok(Value::Int(24)));
+    }
+
+    // =========================================================================
+    // 7. Pipeline |> expressions
+    // =========================================================================
+
+    const PIPELINE_SRC: &str = r#"
+fn double {
+    Pure Int -> Int
+    in: n
+    out: n * 2
+}
+
+fn addOne {
+    Pure Int -> Int
+    in: n
+    out: n + 1
+}
+
+fn pipeline {
+    Pure Int -> Int
+    in: n
+    out: n |> double |> addOne |> double
+}
+"#;
+
+    #[test]
+    fn test_pipeline() {
+        assert_eq!(eval_fn(PIPELINE_SRC, "pipeline", Value::Int(3)), Ok(Value::Int(14)));
+    }
+
+    // =========================================================================
+    // 8. String manipulation pipeline
+    // =========================================================================
+
+    const STRING_SRC: &str = r#"
+fn normalize {
+    Pure String -> String
+    in: s
+    out: do {
+        let trimmed = String.trim(s)
+        let lower = String.toLower(trimmed)
+        lower
+    }
+}
+
+fn greet {
+    Pure String -> String
+    in: name
+    out: do {
+        let n = normalize(name)
+        let greeting = String.concat("hello, ", n)
+        greeting
+    }
+}
+"#;
+
+    #[test]
+    fn test_string_normalize() {
+        assert_eq!(
+            eval_fn(STRING_SRC, "normalize", Value::Str("  Hello World  ".into())),
+            Ok(Value::Str("hello world".into()))
+        );
+    }
+
+    #[test]
+    fn test_string_greet() {
+        assert_eq!(
+            eval_fn(STRING_SRC, "greet", Value::Str(" Alice ".into())),
+            Ok(Value::Str("hello, alice".into()))
+        );
+    }
+
+    // =========================================================================
+    // 9. Maybe chaining — require, getOr, nested Maybe
+    // =========================================================================
+
+    const MAYBE_SRC: &str = r#"
+fn firstPositive {
+    Pure List<Int> -> Maybe<Int>
+    in: xs
+    out: do {
+        let h = List.head(xs)
+        match h {
+            Some(n) -> match n > 0 {
+                true  -> Some(n)
+                false -> firstPositive(List.tail(xs))
+            }
+            None -> None
+        }
+    }
+}
+
+fn firstPositiveOr {
+    Pure { xs: List<Int>, default: Int } -> Int
+    in: ctx
+    out: Maybe.getOr(firstPositive(ctx.xs), ctx.default)
+}
+"#;
+
+    #[test]
+    fn test_first_positive_found() {
+        let xs = Value::List(vec![Value::Int(0), Value::Int(0), Value::Int(5)]);
+        assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(some(Value::Int(5))));
+    }
+
+    #[test]
+    fn test_first_positive_none() {
+        let xs = Value::List(vec![Value::Int(0), Value::Int(0)]);
+        assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(none()));
+    }
+
+    #[test]
+    fn test_first_positive_or_default() {
+        let input = rec(vec![
+            ("xs", Value::List(vec![Value::Int(0)])),
+            ("default", Value::Int(42)),
+        ]);
+        assert_eq!(eval_fn(MAYBE_SRC, "firstPositiveOr", input), Ok(Value::Int(42)));
+    }
+
+    // =========================================================================
+    // 10. Map operations in a real program — frequency counter
+    // =========================================================================
+
+    const MAP_SRC: &str = r#"
+fn countItem {
+    Pure { counts: Map<String, Int>, item: String } -> Map<String, Int>
+    in: ctx
+    out: do {
+        let current = Maybe.getOr(Map.get(ctx.counts, ctx.item), 0)
+        Map.insert(ctx.counts, ctx.item, current + 1)
+    }
+}
+
+fn countAll {
+    Pure { counts: Map<String, Int>, items: List<String> } -> Map<String, Int>
+    in: ctx
+    out: match List.isEmpty(ctx.items) {
+        true  -> ctx.counts
+        false -> do {
+            let h = Maybe.getOr(List.head(ctx.items), "")
+            let rest = List.tail(ctx.items)
+            let updated = countItem({ counts: ctx.counts, item: h })
+            countAll({ counts: updated, items: rest })
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn test_frequency_counter() {
+        let src = MAP_SRC;
+        let items = Value::List(vec![
+            Value::Str("a".into()), Value::Str("b".into()),
+            Value::Str("a".into()), Value::Str("c".into()),
+            Value::Str("a".into()),
+        ]);
+        let input = rec(vec![("counts", Value::Map(vec![])), ("items", items)]);
+        let result = eval_fn(src, "countAll", input).unwrap();
+        if let Value::Map(entries) = &result {
+            let get = |k: &str| entries.iter().find(|(key, _)| key == &Value::Str(k.into())).map(|(_, v)| v.clone());
+            assert_eq!(get("a"), Some(Value::Int(3)));
+            assert_eq!(get("b"), Some(Value::Int(1)));
+            assert_eq!(get("c"), Some(Value::Int(1)));
+        } else {
+            panic!("expected Map, got {:?}", result);
+        }
+    }
+
+    // =========================================================================
+    // 11. Tail-recursive loop — TCO / Never return type
+    // =========================================================================
+
+    const COUNTDOWN_SRC: &str = r#"
+fn countdown {
+    Pure { n: Int, acc: Int } -> Int
+    in: ctx
+    out: match ctx.n {
+        0 -> ctx.acc
+        _ -> countdown({ n: ctx.n - 1, acc: ctx.acc + ctx.n })
+    }
+}
+"#;
+
+    #[test]
+    fn test_countdown_sum_100() {
+        let input = rec(vec![("n", Value::Int(100)), ("acc", Value::Int(0))]);
+        assert_eq!(eval_fn(COUNTDOWN_SRC, "countdown", input), Ok(Value::Int(5050)));
+    }
+
+    #[test]
+    fn test_countdown_sum_1000() {
+        let input = rec(vec![("n", Value::Int(1000)), ("acc", Value::Int(0))]);
+        assert_eq!(eval_fn(COUNTDOWN_SRC, "countdown", input), Ok(Value::Int(500500)));
+    }
+
+    // =========================================================================
+    // 12. Clone operation — clone on list + mutation test
+    // =========================================================================
+
+    const CLONE_SRC: &str = r#"
+fn appendToClone {
+    Pure { xs: List<Int>, item: Int } -> List<Int>
+    in: ctx
+    out: do {
+        let copy = clone(ctx.xs)
+        List.append(copy, ctx.item)
+    }
+}
+"#;
+
+    #[test]
+    fn test_clone_list() {
+        let input = rec(vec![
+            ("xs", Value::List(vec![Value::Int(1), Value::Int(2)])),
+            ("item", Value::Int(3)),
+        ]);
+        assert_eq!(
+            eval_fn(CLONE_SRC, "appendToClone", input),
+            Ok(Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))
+        );
+    }
+
+    // =========================================================================
+    // 13. Multi-function cross-call — verify correctness of dispatch
+    // =========================================================================
+
+    const MULTI_FN_SRC: &str = r#"
+fn isEven {
+    Pure Int -> Bool
+    in: n
+    out: (n % 2) == 0
+}
+
+fn classify {
+    Pure Int -> String
+    in: n
+    out: match isEven(n) {
+        true  -> "even"
+        false -> "odd"
+    }
+}
+
+fn classifyList {
+    Pure List<Int> -> List<String>
+    in: xs
+    out: List.map(xs, classify)
+}
+"#;
+
+    #[test]
+    fn test_classify() {
+        assert_eq!(eval_fn(MULTI_FN_SRC, "classify", Value::Int(4)), Ok(Value::Str("even".into())));
+        assert_eq!(eval_fn(MULTI_FN_SRC, "classify", Value::Int(7)), Ok(Value::Str("odd".into())));
+    }
+
+    #[test]
+    fn test_classify_list() {
+        let xs = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        assert_eq!(
+            eval_fn(MULTI_FN_SRC, "classifyList", xs),
+            Ok(Value::List(vec![
+                Value::Str("odd".into()), Value::Str("even".into()),
+                Value::Str("odd".into()), Value::Str("even".into()),
+            ]))
+        );
+    }
+
+    // =========================================================================
+    // 14. Env + Json pipeline — read config, parse, extract field
+    // =========================================================================
+
+    const ENV_JSON_SRC: &str = r#"
+fn configOrDefault {
+    Pure { key: String, default: String } -> String
+    in: ctx
+    out: Maybe.getOr(Env.get(ctx.key), ctx.default)
+}
+
+fn parseJsonInt {
+    Pure String -> Result<Int, String>
+    in: s
+    out: match Json.parse(s) {
+        Ok(v)  -> match v == 42 {
+            true  -> Result.ok(42)
+            false -> Result.err("not 42")
+        }
+        Err(_) -> Result.err("parse failed")
+    }
+}
+"#;
+
+    #[test]
+    fn test_config_or_default() {
+        let input = rec(vec![
+            ("key", Value::Str("KELN_TEST_NONEXISTENT_XYZ".into())),
+            ("default", Value::Str("fallback".into())),
+        ]);
+        assert_eq!(eval_fn(ENV_JSON_SRC, "configOrDefault", input), Ok(Value::Str("fallback".into())));
+    }
+
+    #[test]
+    fn test_parse_json_int_ok() {
+        assert_eq!(eval_fn(ENV_JSON_SRC, "parseJsonInt", Value::Str("42".into())), Ok(ok(Value::Int(42))));
+    }
+
+    #[test]
+    fn test_parse_json_int_wrong_value() {
+        let result = eval_fn(ENV_JSON_SRC, "parseJsonInt", Value::Str("99".into()));
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    #[test]
+    fn test_parse_json_invalid() {
+        let result = eval_fn(ENV_JSON_SRC, "parseJsonInt", Value::Str("{not json}".into()));
+        assert!(matches!(result, Ok(Value::Variant { name, .. }) if name == "Err"));
+    }
+
+    // =========================================================================
+    // 15. Verify integration — run verify blocks programmatically
+    // =========================================================================
+
+    #[test]
+    fn test_verify_fib() {
+        use crate::verify::VerifyExecutor;
+        let mut ex = VerifyExecutor::from_source(FIB_SRC).unwrap();
+        let results = ex.verify_all();
+        assert!(!results.is_empty(), "fib should have a verify block");
+        for r in &results {
+            assert!(r.is_clean(), "fib verify failed: {:?}", r);
+        }
+    }
+
+    #[test]
+    fn test_verify_parse_port() {
+        use crate::verify::VerifyExecutor;
+        let mut ex = VerifyExecutor::from_source(PARSE_PORT_SRC).unwrap();
+        let results = ex.verify_all();
+        assert!(!results.is_empty());
+        for r in &results {
+            assert!(r.is_clean(), "parsePort verify failed: {:?}", r);
+        }
+    }
+
+    #[test]
+    fn test_verify_traffic_light() {
+        use crate::verify::VerifyExecutor;
+        let mut ex = VerifyExecutor::from_source(TRAFFIC_SRC).unwrap();
+        let results = ex.verify_all();
+        assert!(!results.is_empty());
+        for r in &results {
+            assert!(r.is_clean(), "traffic light verify failed: {:?}", r);
+        }
+    }
+}

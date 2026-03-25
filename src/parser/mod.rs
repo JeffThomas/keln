@@ -37,6 +37,34 @@ impl Parser {
         self.tokens.get(self.pos + n)
     }
 
+    /// Returns true if the current `{` token's matching `}` is immediately
+    /// followed by `->`. Used to distinguish `Name { fields }` record
+    /// constructors from anonymous record patterns that open the next match arm.
+    fn peek_brace_arrow(&self) -> bool {
+        if !matches!(self.peek(), Some(t) if t.value == "{") {
+            return false;
+        }
+        let mut depth = 0i32;
+        let mut i = 0;
+        while let Some(t) = self.peek_nth(i) {
+            match t.value.as_str() {
+                "{" => depth += 1,
+                "}" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(
+                            self.peek_nth(i + 1),
+                            Some(t2) if t2.token_type == TT_OPERATOR && t2.value == "->"
+                        );
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// Advance and return an owned clone of the current token.
     fn advance(&mut self) -> Result<Token, ParseError> {
         if self.pos < self.tokens.len() {
@@ -956,10 +984,14 @@ impl Parser {
 
     fn parse_multiplicative_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_postfix_expr()?;
-        while matches!(self.peek(), Some(t) if t.token_type == TT_SYMBOL && (t.value == "*" || t.value == "/")) {
+        while matches!(self.peek(), Some(t) if t.token_type == TT_SYMBOL && (t.value == "*" || t.value == "/" || t.value == "%")) {
             let span = self.current_span();
             let tok = self.advance()?;
-            let op = if tok.value == "*" { BinaryOp::Mul } else { BinaryOp::Div };
+            let op = match tok.value.as_str() {
+                "*" => BinaryOp::Mul,
+                "/" => BinaryOp::Div,
+                _   => BinaryOp::Mod,
+            };
             let right = self.parse_postfix_expr()?;
             left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right), span };
         }
@@ -1112,7 +1144,7 @@ impl Parser {
                     }
                     return Ok(Expr::QualifiedName(parts, span));
                 }
-                if self.check_symbol("{") {
+                if self.check_symbol("{") && !self.peek_brace_arrow() {
                     return self.parse_record_expr(Some(Box::new(Expr::UpperVar(name, span.clone()))));
                 }
                 Ok(Expr::UpperVar(name, span))

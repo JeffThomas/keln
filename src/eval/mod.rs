@@ -4,6 +4,8 @@ pub mod fingerprint;
 pub mod stdlib;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod integration_tests;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;

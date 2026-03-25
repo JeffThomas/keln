@@ -1,0 +1,50 @@
+-- port_parser.keln
+-- The canonical Keln spec example: parse a port number from a string
+--
+-- Usage:
+--   keln run samples/port_parser.keln --fn parsePort --arg '"8080"'
+--   keln run samples/port_parser.keln --fn parsePort --arg '"99999"'
+--   keln run samples/port_parser.keln --fn parsePort --arg '"abc"'
+--   keln verify samples/port_parser.keln
+
+type PortError =
+    | OutOfRange { value: Int }
+    | NotANumber { input: String }
+
+fn inRange {
+    Pure Int -> Bool
+    in: n
+    out: Bool.and(n >= 1, n <= 65535)
+}
+
+fn parsePort {
+    Pure String -> Result<Int, PortError>
+
+    in: s
+    out: match Int.parse(s) {
+        Ok(n) -> match inRange(n) {
+            true  -> Result.ok(n)
+            false -> Result.err(OutOfRange { value: n })
+        }
+        Err(_) -> Result.err(NotANumber { input: s })
+    }
+
+    confidence: auto
+
+    verify: {
+        given("8080")  -> Ok(8080)
+        given("1")     -> Ok(1)
+        given("65535") -> Ok(65535)
+
+        forall(n: Int where 1..65535) -> Result.isOk(parsePort(Int.toString(n)))
+    }
+}
+
+fn describePort {
+    Pure String -> String
+    in: s
+    out: match parsePort(s) {
+        Ok(n)  -> String.concat("valid port: ", Int.toString(n))
+        Err(_) -> String.concat("invalid port: ", s)
+    }
+}

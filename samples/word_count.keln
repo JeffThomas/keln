@@ -1,0 +1,58 @@
+-- word_count.keln
+-- Count word frequencies in a list of strings using Map
+--
+-- Usage:
+--   keln run samples/word_count.keln --fn countWords --arg '["the","cat","sat","on","the","mat","the"]'
+--   keln run samples/word_count.keln --fn topCount --arg '["a","b","a","a","b","c"]'
+
+fn increment {
+    Pure { counts: Map<String, Int>, word: String } -> Map<String, Int>
+    in: ctx
+    out: do {
+        let current = Maybe.getOr(Map.get(ctx.counts, ctx.word), 0)
+        Map.insert(ctx.counts, ctx.word, current + 1)
+    }
+}
+
+fn countWords {
+    Pure List<String> -> Map<String, Int>
+    in: words
+    out: countHelper({ counts: Map.empty(), words: words })
+    helpers: {
+        countHelper :: Pure { counts: Map<String, Int>, words: List<String> } -> Map<String, Int> =>
+            match List.isEmpty(it.words) {
+                true  -> it.counts
+                false -> do {
+                    let word = Maybe.getOr(List.head(it.words), "")
+                    let rest = List.tail(it.words)
+                    countHelper({ counts: increment({ counts: it.counts, word: word }), words: rest })
+                }
+            }
+    }
+}
+
+fn totalWords {
+    Pure Map<String, Int> -> Int
+    in: counts
+    out: List.fold(Map.values(counts), 0, addPair)
+    helpers: {
+        addPair :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+
+fn topCount {
+    Pure List<String> -> Int
+    in: words
+    out: do {
+        let counts = countWords(words)
+        let vals = Map.values(counts)
+        List.fold(vals, 0, maxPair)
+    }
+    helpers: {
+        maxPair :: Pure { acc: Int, item: Int } -> Int =>
+            match it.item > it.acc {
+                true  -> it.item
+                false -> it.acc
+            }
+    }
+}

@@ -1,0 +1,54 @@
+-- fibonacci.keln
+-- Classic recursive Fibonacci with verify block
+--
+-- Usage:
+--   keln run samples/fibonacci.keln --fn fib --arg 10
+--   keln verify samples/fibonacci.keln
+
+fn fib {
+    Pure Int -> Int
+
+    in: n
+    out: match n {
+        0 -> 0
+        1 -> 1
+        _ -> fib(n - 1) + fib(n - 2)
+    }
+
+    confidence: auto
+
+    verify: {
+        given(0)  -> 0
+        given(1)  -> 1
+        given(2)  -> 1
+        given(5)  -> 5
+        given(7)  -> 13
+        given(10) -> 55
+
+        forall(n: Int where 2..15) -> fib(n) == fib(n - 1) + fib(n - 2)
+    }
+}
+
+fn fibList {
+    Pure Int -> List<Int>
+
+    in: n
+    out: fibListHelper({ n: n, acc: [] })
+
+    confidence: auto
+
+    verify: {
+        given(0) -> []
+        given(1) -> [0]
+        given(5) -> [0, 1, 1, 2, 3]
+        given(7) -> [0, 1, 1, 2, 3, 5, 8]
+    }
+
+    helpers: {
+        fibListHelper :: Pure { n: Int, acc: List<Int> } -> List<Int> =>
+            match it.n {
+                0 -> it.acc
+                _ -> fibListHelper({ n: it.n - 1, acc: List.prepend(it.acc, fib(it.n - 1)) })
+            }
+    }
+}

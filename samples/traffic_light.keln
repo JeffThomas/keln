@@ -1,0 +1,65 @@
+-- traffic_light.keln
+-- State machine: traffic light cycle with a step counter
+--
+-- Usage:
+--   keln run samples/traffic_light.keln --fn nextLight --arg '"Red"'
+--   keln run samples/traffic_light.keln --fn cycleN --arg '{"light":"Green","n":6}'
+--   keln verify samples/traffic_light.keln
+
+type TrafficLight = Red | Yellow | Green
+
+fn nextLight {
+    Pure TrafficLight -> TrafficLight
+
+    in: light
+    out: match light {
+        Red    -> Green
+        Yellow -> Red
+        Green  -> Yellow
+    }
+
+    confidence: auto
+
+    verify: {
+        given(Red)    -> Green
+        given(Yellow) -> Red
+        given(Green)  -> Yellow
+    }
+}
+
+fn cycleN {
+    Pure { light: TrafficLight, n: Int } -> TrafficLight
+
+    in: ctx
+    out: match ctx.n {
+        0 -> ctx.light
+        _ -> cycleN({ light: nextLight(ctx.light), n: ctx.n - 1 })
+    }
+
+    verify: {
+        given({ light: Red, n: 3 }) -> Red
+        given({ light: Green, n: 1 }) -> Yellow
+        given({ light: Yellow, n: 2 }) -> Yellow
+    }
+}
+
+fn lightToString {
+    Pure TrafficLight -> String
+    in: light
+    out: match light {
+        Red    -> "red"
+        Yellow -> "yellow"
+        Green  -> "green"
+    }
+}
+
+fn describeNext {
+    Pure String -> String
+    in: name
+    out: match name {
+        "Red"    -> String.concat("after Red comes: ", lightToString(nextLight(Red)))
+        "Yellow" -> String.concat("after Yellow comes: ", lightToString(nextLight(Yellow)))
+        "Green"  -> String.concat("after Green comes: ", lightToString(nextLight(Green)))
+        _        -> "unknown light"
+    }
+}

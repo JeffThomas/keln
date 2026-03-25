@@ -1,0 +1,60 @@
+-- fizzbuzz.keln
+-- Classic FizzBuzz: for each number 1..n, return "Fizz" (mult of 3),
+-- "Buzz" (mult of 5), "FizzBuzz" (mult of both), or the number itself.
+--
+-- Usage:
+--   keln run samples/fizzbuzz.keln --fn label --arg 15
+--   keln run samples/fizzbuzz.keln --fn label --arg 7
+--   keln run samples/fizzbuzz.keln --fn fizzbuzz --arg 20
+--   keln verify samples/fizzbuzz.keln
+
+fn label {
+    Pure Int -> String
+
+    in: n
+    out: match Bool.and(n % 3 == 0, n % 5 == 0) {
+        true  -> "FizzBuzz"
+        false -> match n % 3 == 0 {
+            true  -> "Fizz"
+            false -> match n % 5 == 0 {
+                true  -> "Buzz"
+                false -> Int.toString(n)
+            }
+        }
+    }
+
+    confidence: auto
+
+    verify: {
+        given(1)  -> "1"
+        given(3)  -> "Fizz"
+        given(5)  -> "Buzz"
+        given(15) -> "FizzBuzz"
+        given(30) -> "FizzBuzz"
+        given(7)  -> "7"
+
+        forall(n: Int where 1..6) -> label(n * 15) == "FizzBuzz"
+    }
+}
+
+fn fizzbuzz {
+    Pure Int -> List<String>
+
+    in: n
+    out: go({ i: 1, limit: n, acc: [] })
+
+    confidence: auto
+
+    verify: {
+        given(1) -> ["1"]
+        given(5) -> ["1", "2", "Fizz", "4", "Buzz"]
+    }
+
+    helpers: {
+        go :: Pure { i: Int, limit: Int, acc: List<String> } -> List<String> =>
+            match it.i > it.limit {
+                true  -> it.acc
+                false -> go({ i: it.i + 1, limit: it.limit, acc: List.append(it.acc, label(it.i)) })
+            }
+    }
+}

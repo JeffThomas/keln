@@ -4,7 +4,7 @@ pub mod string_matcher;
 pub mod symbol_matcher;
 pub mod tokens;
 
-use lexxor::input::InputString;
+use lexxor::input::InputReader;
 use lexxor::matcher::exact::ExactMatcher;
 use lexxor::matcher::float::FloatMatcher;
 use lexxor::matcher::integer::IntegerMatcher;
@@ -34,7 +34,7 @@ use self::tokens::{KEYWORDS, OPERATORS, TT_KEYWORD, TT_OPERATOR};
 /// - "->" is recognized as an operator, not "-" then ">"
 /// - "--" starts a comment, not two minus signs
 pub fn create_lexer(source: &str) -> Box<dyn Lexxer> {
-    let input = InputString::new(source.to_string());
+    let input = InputReader::new(std::io::Cursor::new(source.as_bytes().to_vec()));
 
     Box::new(Lexxor::<4096>::new(
         Box::new(input),

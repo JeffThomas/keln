@@ -833,7 +833,7 @@ impl Checker {
 
     fn check_binary_op(&mut self, lt: &Type, op: &ast::BinaryOp, rt: &Type, span: &Span) -> Type {
         match op {
-            ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul | ast::BinaryOp::Div => {
+            ast::BinaryOp::Add | ast::BinaryOp::Sub | ast::BinaryOp::Mul | ast::BinaryOp::Div | ast::BinaryOp::Mod => {
                 // Arithmetic: both sides must be numeric
                 if !lt.is_numeric() && !matches!(lt, Type::TypeVar(_)) {
                     self.err(format!("left operand of arithmetic op has type {} but expected Int or Float", lt), span);

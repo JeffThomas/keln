@@ -683,14 +683,20 @@ impl Evaluator {
                     false
                 }
             }
-            ast::Pattern::RecordVariant { name, .. } => {
-                matches!(val, Value::Variant { name: n, .. } if n == name)
+            ast::Pattern::RecordVariant { name, fields, .. } => {
+                if let Value::Variant { name: n, payload: VariantPayload::Record(fvals) } = val {
+                    n == name && self.field_patterns_match(fields, fvals)
+                } else {
+                    false
+                }
             }
-            ast::Pattern::Record { .. } => {
-                matches!(
-                    val,
-                    Value::Record(_) | Value::Variant { payload: VariantPayload::Record(_), .. }
-                )
+            ast::Pattern::Record { fields, .. } => {
+                let fvals = match val {
+                    Value::Record(fvals) => fvals,
+                    Value::Variant { payload: VariantPayload::Record(fvals), .. } => fvals,
+                    _ => return false,
+                };
+                self.field_patterns_match(fields, fvals)
             }
             ast::Pattern::List(pats, _) => {
                 if let Value::List(items) = val {
@@ -701,6 +707,18 @@ impl Evaluator {
                 }
             }
         }
+    }
+
+    fn field_patterns_match(&self, fields: &[ast::FieldPattern], fvals: &[(String, Value)]) -> bool {
+        fields.iter().all(|fp| match fp {
+            ast::FieldPattern::Named(fname, pat) => fvals
+                .iter()
+                .find(|(n, _)| n == fname)
+                .map(|(_, v)| self.pattern_matches(pat, v))
+                .unwrap_or(false),
+            ast::FieldPattern::Shorthand(fname) => fvals.iter().any(|(n, _)| n == fname),
+            ast::FieldPattern::Wildcard => true,
+        })
     }
 
     pub(crate) fn bind_pattern(
@@ -824,6 +842,16 @@ fn eval_binop(
             (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
             _ => Err(RuntimeError::at(format!("type error: {} * {}", left, right), span)),
+        },
+        ast::BinaryOp::Mod => match (left, right) {
+            (Value::Int(a), Value::Int(b)) => {
+                if *b == 0 {
+                    Err(RuntimeError::at("modulo by zero", span))
+                } else {
+                    Ok(Value::Int(a % b))
+                }
+            }
+            _ => Err(RuntimeError::at(format!("type error: {} % {}", left, right), span)),
         },
         ast::BinaryOp::Div => match (left, right) {
             (Value::Int(a), Value::Int(b)) => {

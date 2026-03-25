@@ -1,0 +1,75 @@
+-- fizzbuzz2.keln
+-- FizzBuzz with a typed sum type for the classification result.
+-- Demonstrates: sum types with payloads, matching on a named record of booleans,
+-- and passing a named helper as a FunctionRef to List.map.
+--
+-- Usage:
+--   keln run samples/fizzbuzz2.keln --fn classify --arg 15
+--   keln run samples/fizzbuzz2.keln --fn fizzBuzz --arg 20
+--   keln verify samples/fizzbuzz2.keln
+
+type FizzBuzzResult =
+    | Fizz
+    | Buzz
+    | FizzBuzz
+    | Number(Int)
+
+fn classify {
+    Pure Int -> FizzBuzzResult
+    in: n
+    out: match { by3: n % 3 == 0, by5: n % 5 == 0 } {
+        { by3: true, by5: true }  -> FizzBuzz
+        { by3: true, by5: false } -> Fizz
+        { by3: false, by5: true } -> Buzz
+        { by3: false, by5: false } -> Number(n)
+    }
+
+    confidence: auto
+
+    verify: {
+        given(3)  -> Fizz
+        given(5)  -> Buzz
+        given(15) -> FizzBuzz
+        given(7)  -> Number(7)
+
+        forall(n: Int where 1..100) -> classify(n * 15) == FizzBuzz
+    }
+}
+
+fn toLabel {
+    Pure FizzBuzzResult -> String
+    in: r
+    out: match r {
+        FizzBuzz  -> "FizzBuzz"
+        Fizz      -> "Fizz"
+        Buzz      -> "Buzz"
+        Number(n) -> Int.toString(n)
+    }
+
+    confidence: auto
+
+    verify: {
+        given(Fizz)        -> "Fizz"
+        given(Buzz)        -> "Buzz"
+        given(FizzBuzz)    -> "FizzBuzz"
+        given(Number(7))   -> "7"
+        given(Number(100)) -> "100"
+    }
+}
+
+fn fizzBuzz {
+    Pure Int -> List<String>
+    in: n
+    out: List.map(List.range(1, n + 1), applyBoth)
+
+    confidence: auto
+
+    verify: {
+        given(5)  -> ["1", "2", "Fizz", "4", "Buzz"]
+        given(15) -> ["1", "2", "Fizz", "4", "Buzz", "Fizz", "7", "8", "Fizz", "Buzz", "11", "Fizz", "13", "14", "FizzBuzz"]
+    }
+
+    helpers: {
+        applyBoth :: Pure Int -> String => toLabel(classify(it))
+    }
+}

@@ -1,0 +1,119 @@
+-- safe_math.keln
+-- Arithmetic with explicit error handling and Result chaining
+--
+-- Usage:
+--   keln run samples/safe_math.keln --fn safeDivide --arg '{"a":100,"b":4}'
+--   keln run samples/safe_math.keln --fn safeDivide --arg '{"a":10,"b":0}'
+--   keln run samples/safe_math.keln --fn safeAverage --arg '[10,20,30,40]'
+--   keln run samples/safe_math.keln --fn classify --arg '7'
+--   keln verify samples/safe_math.keln
+
+fn safeDivide {
+    Pure { a: Int, b: Int } -> Result<Int, String>
+
+    in: ctx
+    out: match ctx.b == 0 {
+        true  -> Result.err("division by zero")
+        false -> Result.ok(ctx.a / ctx.b)
+    }
+
+    confidence: auto
+
+    verify: {
+        given({ a: 10, b: 2 }) -> Ok(5)
+        given({ a: 0,  b: 5 }) -> Ok(0)
+        given({ a: 7,  b: 0 }) -> Err("division by zero")
+
+        forall(b: Int where 1..100) ->
+            Result.isOk(safeDivide({ a: 100, b: b }))
+    }
+}
+
+fn safeSum {
+    Pure List<Int> -> Int
+    in: xs
+    out: List.fold(xs, 0, addPair)
+
+    confidence: auto
+
+    verify: {
+        given([])         -> 0
+        given([1, 2, 3])  -> 6
+        given([10, 20])   -> 30
+    }
+
+    helpers: {
+        addPair :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+
+fn safeAverage {
+    Pure List<Int> -> Result<Int, String>
+
+    in: xs
+    out: match List.isEmpty(xs) {
+        true  -> Result.err("empty list")
+        false -> safeDivide({ a: safeSum(xs), b: List.len(xs) })
+    }
+
+    verify: {
+        given([10, 20, 30]) -> Ok(20)
+        given([])           -> Err("empty list")
+        given([7])          -> Ok(7)
+    }
+}
+
+fn isEven {
+    Pure Int -> Bool
+    in: n
+    out: (n % 2) == 0
+
+    confidence: auto
+
+    verify: {
+        given(0) -> true
+        given(1) -> false
+        given(4) -> true
+        given(7) -> false
+    }
+}
+
+fn classify {
+    Pure Int -> String
+    in: n
+    out: match isEven(n) {
+        true  -> "even"
+        false -> "odd"
+    }
+
+    verify: {
+        given(0)  -> "even"
+        given(1)  -> "odd"
+        given(4)  -> "even"
+        given(7)  -> "odd"
+        given(12) -> "even"
+    }
+}
+
+fn collatz {
+    Pure Int -> Int
+
+    in: n
+    out: match n {
+        1 -> 0
+        _ -> match isEven(n) {
+            true  -> 1 + collatz(n / 2)
+            false -> 1 + collatz(n * 3 + 1)
+        }
+    }
+
+    confidence: auto
+
+    verify: {
+        given(1) -> 0
+        given(2) -> 1
+        given(4) -> 2
+        given(3) -> 7
+        given(6) -> 8
+    }
+}

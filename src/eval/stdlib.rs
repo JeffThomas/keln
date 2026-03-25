@@ -15,6 +15,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Result.unwrap"
             | "Result.unwrapOr"
             | "Result.sequence"
+            | "Result.toMaybe"
             | "Maybe.some"
             | "Maybe.none"
             | "Maybe.map"
@@ -29,9 +30,11 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.foldl"
             | "List.foldr"
             | "List.len"
+            | "List.length"
             | "List.head"
             | "List.tail"
             | "List.append"
+            | "List.prepend"
             | "List.concat"
             | "List.isEmpty"
             | "List.find"
@@ -58,6 +61,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Float.floor"
             | "Float.ceil"
             | "String.len"
+            | "String.length"
             | "String.trim"
             | "String.concat"
             | "String.contains"
@@ -76,6 +80,8 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Bytes.toString"
             | "Bool.toString"
             | "Bool.not"
+            | "Bool.and"
+            | "Bool.or"
             | "Task.spawn"
             | "Task.await"
             | "Task.awaitAll"
@@ -254,6 +260,17 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("Result.sequence: expected List")),
             }
         }
+        "Result.toMaybe" => {
+            let v = one(args, "Result.toMaybe")?;
+            match v {
+                Value::Variant { name, payload } if name == "Ok" => match payload {
+                    VariantPayload::Tuple(inner) => Ok(some(*inner)),
+                    _ => Ok(some(Value::Unit)),
+                },
+                Value::Variant { .. } => Ok(none()),
+                _ => Err(RuntimeError::new("Result.toMaybe: expected Result")),
+            }
+        }
 
         // =====================================================================
         // Maybe
@@ -383,8 +400,8 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("List.foldr: expected List")),
             }
         }
-        "List.len" => {
-            let v = one(args, "List.len")?;
+        "List.len" | "List.length" => {
+            let v = one(args, name)?;
             match v {
                 Value::List(items) => Ok(Value::Int(items.len() as i64)),
                 _ => Err(RuntimeError::new("List.len: expected List")),
@@ -430,6 +447,16 @@ pub fn dispatch(
                     Ok(Value::List(items))
                 }
                 _ => Err(RuntimeError::new("List.append: expected List")),
+            }
+        }
+        "List.prepend" => {
+            let (list, item) = two(args, "List.prepend")?;
+            match list {
+                Value::List(mut items) => {
+                    items.insert(0, item);
+                    Ok(Value::List(items))
+                }
+                _ => Err(RuntimeError::new("List.prepend: expected List")),
             }
         }
         "List.concat" => {
@@ -673,8 +700,8 @@ pub fn dispatch(
         // =====================================================================
         // String
         // =====================================================================
-        "String.len" => {
-            let v = one(args, "String.len")?;
+        "String.len" | "String.length" => {
+            let v = one(args, name)?;
             match v {
                 Value::Str(s) => Ok(Value::Int(s.len() as i64)),
                 _ => Err(RuntimeError::new("String.len: expected String")),
@@ -833,6 +860,20 @@ pub fn dispatch(
             match v {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
                 _ => Err(RuntimeError::new("Bool.not: expected Bool")),
+            }
+        }
+        "Bool.and" => {
+            let (a, b) = two(args, "Bool.and")?;
+            match (a, b) {
+                (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x && y)),
+                _ => Err(RuntimeError::new("Bool.and: expected Bool, Bool")),
+            }
+        }
+        "Bool.or" => {
+            let (a, b) = two(args, "Bool.or")?;
+            match (a, b) {
+                (Value::Bool(x), Value::Bool(y)) => Ok(Value::Bool(x || y)),
+                _ => Err(RuntimeError::new("Bool.or: expected Bool, Bool")),
             }
         }
 
@@ -1128,16 +1169,14 @@ pub fn dispatch(
             }
         }
         "Map.insert" => {
-            let (map, kv) = two(args, "Map.insert")?;
-            match (map, kv) {
-                (Value::Map(mut pairs), Value::Record(mut fields)) if fields.len() >= 2 => {
-                    let (_, key) = fields.remove(0);
-                    let (_, val) = fields.remove(0);
+            let (map, key, val) = three(args, "Map.insert")?;
+            match map {
+                Value::Map(mut pairs) => {
                     pairs.retain(|(k, _)| k != &key);
                     pairs.push((key, val));
                     Ok(Value::Map(pairs))
                 }
-                _ => Err(RuntimeError::new("Map.insert: expected Map, {key, value}")),
+                _ => Err(RuntimeError::new("Map.insert: expected Map as first arg")),
             }
         }
         "Map.get" => {
@@ -1450,7 +1489,7 @@ fn stub_response(status: i64) -> Value {
 // JSON <-> Value helpers
 // =========================================================================
 
-fn json_to_value(j: serde_json::Value) -> Value {
+pub fn json_to_value(j: serde_json::Value) -> Value {
     match j {
         serde_json::Value::Null => Value::Unit,
         serde_json::Value::Bool(b) => Value::Bool(b),
@@ -1471,7 +1510,7 @@ fn json_to_value(j: serde_json::Value) -> Value {
     }
 }
 
-fn value_to_json(v: &Value) -> serde_json::Value {
+pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Unit => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
