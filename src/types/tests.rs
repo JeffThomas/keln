@@ -437,6 +437,82 @@ fn bad {
         }
     }
 
+    // =========================================================================
+    // Helper function scoping — regression tests
+    // =========================================================================
+
+    #[test]
+    fn test_compact_helper_it_binding_ok() {
+        // 'it' must be visible inside a compact helper body
+        assert_no_errors(r#"fn double {
+    Pure Int -> Int
+    in: n
+    out: go(n)
+    helpers: {
+        go :: Pure Int -> Int => it * 2
+    }
+}"#);
+    }
+
+    #[test]
+    fn test_compact_helper_name_visible_in_out() {
+        // The helper name must be visible in the out: expression
+        assert_no_errors(r#"fn run {
+    Pure Int -> Int
+    in: n
+    out: step(n)
+    helpers: {
+        step :: Pure Int -> Int => it + 1
+    }
+}"#);
+    }
+
+    #[test]
+    fn test_compact_helper_name_visible_in_verify() {
+        // The helper name must also be visible inside verify:
+        assert_no_errors(r#"fn run {
+    Pure Int -> Int
+    in: n
+    out: step(n)
+    verify: {
+        given(0) -> 1
+    }
+    helpers: {
+        step :: Pure Int -> Int => it + 1
+    }
+}"#);
+    }
+
+    #[test]
+    fn test_full_helper_visible_in_out() {
+        // A full helper fn must be visible in the parent out: expression
+        assert_no_errors(r#"fn run {
+    Pure Int -> Int
+    in: n
+    out: helper(n)
+    helpers: {
+        fn helper {
+            Pure Int -> Int
+            in: x
+            out: x + 10
+        }
+    }
+}"#);
+    }
+
+    #[test]
+    fn test_compact_helper_wrong_body_type_error() {
+        // Compact helper body returning wrong type should produce a type error
+        assert_has_error(r#"fn run {
+    Pure Int -> String
+    in: n
+    out: step(n)
+    helpers: {
+        step :: Pure Int -> String => it + 1
+    }
+}"#, "type mismatch");
+    }
+
     #[test]
     fn test_env_error_variants_resolve() {
         use crate::types::check_source;

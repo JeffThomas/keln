@@ -218,6 +218,13 @@ impl Checker {
         // Bind input pattern to input type
         self.bind_pattern(&fd.in_clause, &sig.input);
 
+        // Pre-register helper signatures so they are visible in out: and verify:
+        if let Some(helpers) = &fd.helpers {
+            for helper in helpers {
+                self.register_helper_sig(helper);
+            }
+        }
+
         // Check output expression and verify type matches signature
         let out_type = self.infer_expr(&fd.out_clause);
         self.check_assignable(&out_type, &sig.output, &fd.span);
@@ -251,11 +258,23 @@ impl Checker {
         self.current_effects = prev_effects;
     }
 
+    fn register_helper_sig(&mut self, helper: &ast::HelperDecl) {
+        match helper {
+            ast::HelperDecl::Full(fd) => {
+                self.register_fn_decl(fd);
+            }
+            ast::HelperDecl::Compact { name, effects, input_type, output_type, .. } => {
+                let eff = EffectSet::from_names(&effects.effects);
+                let inp = self.resolve_type_expr(input_type, &[]);
+                let out = self.resolve_type_expr(output_type, &[]);
+                self.env.register_fn(name, FnSig { effects: eff, input: inp, output: out });
+            }
+        }
+    }
+
     fn check_helper_decl(&mut self, helper: &ast::HelperDecl) {
         match helper {
             ast::HelperDecl::Full(fd) => {
-                // Register and check the full fn decl
-                self.register_fn_decl(fd);
                 self.check_fn_decl(fd);
             }
             ast::HelperDecl::Compact { name, effects, input_type, output_type, body, span, .. } => {
@@ -267,8 +286,7 @@ impl Checker {
                 let prev_effects = self.current_effects.clone();
                 self.current_effects = eff;
                 self.env.push_scope();
-                // Compact helpers have the input bound implicitly
-                self.env.bind("_input", inp);
+                self.env.bind("it", inp);
                 let body_type = self.infer_expr(body);
                 self.check_assignable(&body_type, &out, span);
                 self.env.pop_scope();
