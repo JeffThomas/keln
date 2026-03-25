@@ -645,4 +645,108 @@ fn parseJsonInt {
             assert!(r.is_clean(), "traffic light verify failed: {:?}", r);
         }
     }
+
+    // =========================================================================
+    // Regression 1: Record pattern field values must be checked recursively.
+    // Before the fix, Pattern::Record only checked the shape of the value, not
+    // the actual field sub-patterns. All arms matched the same record type so
+    // only the first arm ever fired — every input produced the same result.
+    // =========================================================================
+
+    const RECORD_PATTERN_SRC: &str = r#"
+fn classify {
+    Pure Int -> String
+    in: n
+    out: match { by3: n % 3 == 0, by5: n % 5 == 0 } {
+        { by3: true,  by5: true  } -> "FizzBuzz"
+        { by3: true,  by5: false } -> "Fizz"
+        { by3: false, by5: true  } -> "Buzz"
+        { by3: false, by5: false } -> "Number"
+    }
+}
+"#;
+
+    #[test]
+    fn test_record_pattern_fizzbuzz() {
+        assert_eq!(eval_fn(RECORD_PATTERN_SRC, "classify", Value::Int(15)), Ok(Value::Str("FizzBuzz".into())));
+    }
+
+    #[test]
+    fn test_record_pattern_fizz() {
+        assert_eq!(eval_fn(RECORD_PATTERN_SRC, "classify", Value::Int(3)), Ok(Value::Str("Fizz".into())));
+    }
+
+    #[test]
+    fn test_record_pattern_buzz() {
+        assert_eq!(eval_fn(RECORD_PATTERN_SRC, "classify", Value::Int(5)), Ok(Value::Str("Buzz".into())));
+    }
+
+    #[test]
+    fn test_record_pattern_number() {
+        assert_eq!(eval_fn(RECORD_PATTERN_SRC, "classify", Value::Int(7)), Ok(Value::Str("Number".into())));
+    }
+
+    // =========================================================================
+    // Regression 2: Parser UpperVar { } ambiguity in match arm bodies.
+    // Before the fix, after parsing a unit variant as a match arm body (e.g.
+    // `FizzBuzz`), the parser greedily consumed the next arm's opening `{` as
+    // the start of a named record constructor, producing a parse error.
+    // =========================================================================
+
+    const UNIT_VARIANT_THEN_RECORD_PATTERN_SRC: &str = r#"
+type Result2 = FizzBuzz | Fizz | Buzz | Number
+
+fn classify2 {
+    Pure { by3: Bool, by5: Bool } -> Result2
+    in: ctx
+    out: match ctx {
+        { by3: true,  by5: true  } -> FizzBuzz
+        { by3: true,  by5: false } -> Fizz
+        { by3: false, by5: true  } -> Buzz
+        { by3: false, by5: false } -> Number
+    }
+}
+"#;
+
+    #[test]
+    fn test_unit_variant_then_record_pattern_parses() {
+        let input = rec(vec![("by3", Value::Bool(true)), ("by5", Value::Bool(true))]);
+        assert_eq!(
+            eval_fn(UNIT_VARIANT_THEN_RECORD_PATTERN_SRC, "classify2", input),
+            Ok(unit_variant("FizzBuzz"))
+        );
+    }
+
+    #[test]
+    fn test_unit_variant_then_record_pattern_second_arm() {
+        let input = rec(vec![("by3", Value::Bool(true)), ("by5", Value::Bool(false))]);
+        assert_eq!(
+            eval_fn(UNIT_VARIANT_THEN_RECORD_PATTERN_SRC, "classify2", input),
+            Ok(unit_variant("Fizz"))
+        );
+    }
+
+    // =========================================================================
+    // Regression 3: Lexer InputString truncation at 1024 characters.
+    // Before the fix, lexxor::InputString silently truncated source to 1024
+    // chars. Programs longer than that would fail to parse or lose definitions.
+    // =========================================================================
+
+    #[test]
+    fn test_lexer_long_source_not_truncated() {
+        // Build a source file well over 1024 characters: 30 trivial functions
+        // (~59 chars each => ~1770 chars total). func25 starts around byte 1475,
+        // well past the 1024-char truncation point of the old InputString lexer.
+        let mut src = String::new();
+        for i in 0..30 {
+            src.push_str(&format!(
+                "fn func{i} {{\n    Pure Int -> Int\n    in: n\n    out: n + {i}\n}}\n\n"
+            ));
+        }
+        assert!(src.len() > 1024, "test source must exceed 1024 chars (got {})", src.len());
+
+        // func25 is defined ~1475 bytes in — invisible to the old truncating lexer.
+        assert_eq!(eval_fn(&src, "func25", Value::Int(0)),  Ok(Value::Int(25)));
+        assert_eq!(eval_fn(&src, "func25", Value::Int(10)), Ok(Value::Int(35)));
+    }
 }
