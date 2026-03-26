@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 use crate::eval::{RuntimeError, Value};
 
 // =============================================================================
@@ -56,7 +57,7 @@ pub struct CallFrame {
 // Constant table
 // =============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Constant {
     Int(i64),
     Float(f64),
@@ -144,6 +145,24 @@ impl ConstantTable {
     pub fn get(&self, idx: u32) -> &Constant {
         &self.entries[idx as usize]
     }
+
+    /// Rebuild intern-index maps from `entries` after deserialization.
+    pub fn rebuild_indices(&mut self) {
+        self.str_idx.clear();
+        self.int_idx.clear();
+        self.bool_idx = [None; 2];
+        self.unit_idx = None;
+        for (i, c) in self.entries.iter().enumerate() {
+            let i = i as u32;
+            match c {
+                Constant::Str(s)  => { self.str_idx.insert(s.clone(), i); }
+                Constant::Int(n)  => { self.int_idx.insert(*n, i); }
+                Constant::Bool(b) => { self.bool_idx[*b as usize] = Some(i); }
+                Constant::Unit    => { self.unit_idx = Some(i); }
+                Constant::Float(_) => {}
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -180,6 +199,13 @@ impl TagTable {
 
     pub fn lookup(&self, name: &str) -> Option<u32> {
         self.index.get(name).copied()
+    }
+
+    /// Insert a name directly (used during deserialization; assumes no duplicates).
+    pub fn intern_raw(&mut self, name: String) {
+        let i = self.names.len() as u32;
+        self.index.insert(name.clone(), i);
+        self.names.push(name);
     }
 }
 
@@ -340,7 +366,7 @@ impl BuiltinTable {
 // =============================================================================
 
 /// One arm of a `select` expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectArm {
     /// Register to write the received value into (0 if binding is `_`).
     pub binding_reg: usize,
@@ -353,7 +379,7 @@ pub struct SelectArm {
 }
 
 /// The optional timeout arm of a `select` expression.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeoutArm {
     /// Register holding the Duration value.
     pub duration_reg: usize,
@@ -361,7 +387,7 @@ pub struct TimeoutArm {
     pub body_ip: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Instruction {
     // =========================================================================
     // Load operations
@@ -501,7 +527,7 @@ pub enum Instruction {
 // KelnFn — compiled function
 // =============================================================================
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct KelnFn {
     pub name: String,
     pub register_count: usize,

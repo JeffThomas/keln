@@ -1,6 +1,7 @@
 pub mod ir;
 pub mod lower;
 pub mod exec;
+pub mod codec;
 #[cfg(test)]
 mod tests;
 

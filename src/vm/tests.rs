@@ -1,5 +1,6 @@
 use crate::eval::Value;
 use crate::parser::parse;
+use crate::vm::codec;
 use crate::vm::exec::execute_fn;
 use crate::vm::ir::{Instruction, KelnModule};
 use crate::vm::lower::lower_program;
@@ -427,4 +428,87 @@ fn test_exec_modulo() {
         "fn fizz { Pure Int -> Int  in: n  out: n % 3 }",
         "fizz", Value::Int(9), Value::Int(0),
     );
+}
+
+// =============================================================================
+// Phase 4d — codec roundtrip and compile+run tests
+// =============================================================================
+
+fn roundtrip(src: &str) -> KelnModule {
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let bytes = codec::encode(&module, codec::FLAG_DEBUG_INFO, None).expect("encode");
+    assert!(bytes.starts_with(b"KELN"), "missing magic");
+    let (decoded, flags, entry) = codec::decode(&bytes).expect("decode");
+    assert_eq!(flags, codec::FLAG_DEBUG_INFO);
+    assert_eq!(entry, None);
+    decoded
+}
+
+#[test]
+fn test_codec_roundtrip_double() {
+    let src = "fn double { Pure Int -> Int  in: n  out: n * 2 }";
+    let decoded = roundtrip(src);
+    let result = execute_fn(&decoded, "double", Value::Int(5)).expect("execute");
+    assert_eq!(result, Value::Int(10));
+}
+
+#[test]
+fn test_codec_roundtrip_countdown() {
+    let src = "fn countdown { Pure Int -> Int\n\
+               in: n\n\
+               out: match n { 0 -> 0  _ -> countdown(n - 1) } }";
+    let decoded = roundtrip(src);
+    let result = execute_fn(&decoded, "countdown", Value::Int(100)).expect("execute");
+    assert_eq!(result, Value::Int(0));
+}
+
+#[test]
+fn test_codec_header_magic() {
+    let src = "fn id { Pure Int -> Int  in: n  out: n }";
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let bytes = codec::encode(&module, 0, None).expect("encode");
+    assert_eq!(&bytes[0..4], codec::MAGIC);
+    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
+    assert_eq!(version, codec::FORMAT_VERSION);
+}
+
+#[test]
+fn test_codec_entry_point_roundtrip() {
+    let src = "fn main { Pure Int -> Int  in: n  out: n + 1 }";
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let entry_idx = module.fn_idx("main").expect("main not found");
+    let bytes = codec::encode(&module, codec::FLAG_DEBUG_INFO, Some(entry_idx)).expect("encode");
+    let (decoded, flags, entry) = codec::decode(&bytes).expect("decode");
+    assert_eq!(flags, codec::FLAG_DEBUG_INFO | codec::FLAG_HAS_ENTRY);
+    assert_eq!(entry, Some(entry_idx));
+    let fn_name = decoded.fns[entry.unwrap()].name.clone();
+    let result = execute_fn(&decoded, &fn_name, Value::Int(41)).expect("execute");
+    assert_eq!(result, Value::Int(42));
+}
+
+#[test]
+fn test_codec_bad_magic_rejected() {
+    let mut bytes = vec![0u8; 12];
+    bytes[0..4].copy_from_slice(b"NOPE");
+    assert!(codec::decode(&bytes).is_err());
+}
+
+#[test]
+fn test_codec_release_strips_debug_names() {
+    let src = "fn double { Pure Int -> Int  in: n  out: n * 2 }";
+    let prog = parse(src).expect("parse");
+    let mut module = lower_program(&prog).expect("lower");
+    // strip debug names to simulate --release
+    for f in &mut module.fns {
+        f.debug_names.iter_mut().for_each(|n| *n = None);
+    }
+    let bytes = codec::encode(&module, 0, None).expect("encode");
+    let (decoded, flags, _) = codec::decode(&bytes).expect("decode");
+    assert_eq!(flags, 0);
+    assert!(decoded.fns[0].debug_names.iter().all(|n| n.is_none()));
+    let result = execute_fn(&decoded, "double", Value::Int(7)).expect("execute");
+    assert_eq!(result, Value::Int(14));
 }
