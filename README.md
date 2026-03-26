@@ -22,7 +22,7 @@ The answer turns out to be quite different from anything that exists today.
 
 This is not my creation. I am, at best, the enabler.
 
-I've spent most of my programming life working on my own scripting and programming language — some of the detritus of that can be found in my GitHub profile. I started using AI in those efforts, which led to Rill. Then around midnight one Friday, watching Claude Sonnet 4.6 chew over something in Rill, it occurred to me that AI is doing more and more programming, but every popular language is still built around human cognitive constraints. So I typed:
+I've spent most of my programming life working on my own scripting and programming language — some of the detritus of that can be found in my GitHub profile. I started using AI in those efforts, which led to Rill. Then around midnight one Friday, watching Claude Sonnet 4.6 chew over something in Rill, it occurred to me that AI is doing more and more programming, but every popular language is still built around human thought patterns. So I typed:
 
 *"If you were going to write a programming language specifically for use by AI, what would it be like?"*
 
