@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::eval::{eval_fn, load_source, Value, VariantPayload};
+    use crate::eval::{eval_fn, Value, VariantPayload};
 
     fn ok(v: Value) -> Value {
         Value::Variant {
@@ -14,17 +14,6 @@ mod tests {
             name: "Err".to_string(),
             payload: VariantPayload::Tuple(Box::new(v)),
         }
-    }
-
-    fn some(v: Value) -> Value {
-        Value::Variant {
-            name: "Some".to_string(),
-            payload: VariantPayload::Tuple(Box::new(v)),
-        }
-    }
-
-    fn none() -> Value {
-        Value::Variant { name: "None".to_string(), payload: VariantPayload::Unit }
     }
 
     // =========================================================================

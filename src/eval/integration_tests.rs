@@ -9,9 +9,6 @@ mod integration {
     fn ok(v: Value) -> Value {
         Value::Variant { name: "Ok".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
     }
-    fn err(v: Value) -> Value {
-        Value::Variant { name: "Err".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
-    }
     fn some(v: Value) -> Value {
         Value::Variant { name: "Some".to_string(), payload: VariantPayload::Tuple(Box::new(v)) }
     }
