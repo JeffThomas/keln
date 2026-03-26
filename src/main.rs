@@ -277,7 +277,7 @@ fn cmd_run_bc(path: &str, func_override: Option<&str>, arg_json: Option<&str>) {
             println!("{}", serde_json::to_string_pretty(&j).unwrap());
         }
         Err(e) => {
-            eprintln!("runtime error: {}", e.message);
+            eprintln!("runtime error: {}", e);
             std::process::exit(1);
         }
     }

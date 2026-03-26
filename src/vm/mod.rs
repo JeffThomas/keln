@@ -12,5 +12,5 @@ use crate::eval::Value;
 pub fn eval_fn(source: &str, fn_name: &str, arg: Value) -> Result<Value, String> {
     let program = crate::parser::parse(source).map_err(|e| format!("{}", e))?;
     let module = lower::lower_program(&program)?;
-    exec::execute_fn(&module, fn_name, arg).map_err(|e| e.message)
+    exec::execute_fn(&module, fn_name, arg).map_err(|e| format!("{}", e))
 }

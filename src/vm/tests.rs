@@ -1,7 +1,7 @@
 use crate::eval::Value;
 use crate::parser::parse;
 use crate::vm::codec;
-use crate::vm::exec::execute_fn;
+use crate::vm::exec::{execute_fn};
 use crate::vm::ir::{Instruction, KelnModule};
 use crate::vm::lower::lower_program;
 
@@ -494,6 +494,48 @@ fn test_codec_bad_magic_rejected() {
     let mut bytes = vec![0u8; 12];
     bytes[0..4].copy_from_slice(b"NOPE");
     assert!(codec::decode(&bytes).is_err());
+}
+
+// =============================================================================
+// Stack trace tests (4b-6)
+// =============================================================================
+
+#[test]
+fn test_exec_stack_trace_on_nested_error() {
+    // divide(n) + 1 forces a non-tail Call so caller stays on the explicit call stack
+    let src = "\
+fn divide { Pure Int -> Int  in: n  out: n / 0 }\n\
+fn caller { Pure Int -> Int  in: n  out: divide(n) + 1 }";
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let err = execute_fn(&module, "caller", Value::Int(5)).unwrap_err();
+    assert!(!err.stack_trace.is_empty(), "expected non-empty stack trace");
+    let trace = err.stack_trace.join("\n");
+    assert!(trace.contains("divide"), "trace should mention 'divide': {}", trace);
+    assert!(trace.contains("caller"), "trace should mention 'caller': {}", trace);
+}
+
+#[test]
+fn test_exec_stack_trace_display() {
+    let src = "\
+fn bad { Pure Int -> Int  in: n  out: n / 0 }\n\
+fn outer { Pure Int -> Int  in: n  out: bad(n) }";
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let err = execute_fn(&module, "outer", Value::Int(1)).unwrap_err();
+    let display = format!("{}", err);
+    assert!(display.contains("division by zero"), "display: {}", display);
+    assert!(display.contains("stack trace"), "display: {}", display);
+}
+
+#[test]
+fn test_exec_stack_trace_direct_error_no_callers() {
+    let src = "fn solo { Pure Int -> Int  in: n  out: n / 0 }";
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let err = execute_fn(&module, "solo", Value::Int(3)).unwrap_err();
+    assert_eq!(err.stack_trace.len(), 1);
+    assert!(err.stack_trace[0].contains("solo"));
 }
 
 #[test]
