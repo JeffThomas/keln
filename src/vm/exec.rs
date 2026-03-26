@@ -390,8 +390,12 @@ fn execute(module: &KelnModule, fn_idx: usize, arg: Value) -> Result<Value, Exec
                     let chan = frame.clone_reg(arm.channel_reg)?;
                     if let Value::Channel(rc) = &chan {
                         if let Some(v) = rc.borrow_mut().pop_front() {
-                            // Bind the received value and jump to arm body
-                            frame.write(*dst, v);
+                            // Write received value into the binding register so the
+                            // arm body can look it up by name. binding_reg == 0 means
+                            // wildcard `_` — don't overwrite R0 (the fn input).
+                            if arm.binding_reg != 0 {
+                                frame.write(arm.binding_reg, v);
+                            }
                             selected = Some(Value::Unit);
                             // Execute the arm body inline by adjusting ip
                             ip = arm.body_ip;
