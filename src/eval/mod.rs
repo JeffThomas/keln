@@ -1,4 +1,5 @@
 pub mod env;
+#[allow(clippy::module_inception)]
 pub mod eval;
 pub mod fingerprint;
 pub mod stdlib;

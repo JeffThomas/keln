@@ -110,7 +110,7 @@ fn cmd_tokens(path: &str, filter_line: Option<usize>) {
             println!("{:>5}  {:>4}  {:>12}  {:>10}  value", "idx", "line", "col", "type");
             println!("{}", "-".repeat(60));
             for (i, t) in tokens.iter().enumerate() {
-                if filter_line.map_or(true, |l| t.line == l) {
+                if filter_line.is_none_or(|l| t.line == l) {
                     let type_name = match t.token_type {
                         TT_INTEGER   => "INTEGER",
                         TT_FLOAT     => "FLOAT",

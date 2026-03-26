@@ -47,10 +47,8 @@ impl VerifyExecutor {
         let mut results = Vec::new();
         for name in fn_names {
             let fd = self.evaluator.fns.get(&name).cloned();
-            if let Some(fd) = fd {
-                if fd.verify.is_some() {
-                    results.push(self.verify_fn(&fd));
-                }
+            if let Some(fd) = fd && fd.verify.is_some() {
+                results.push(self.verify_fn(&fd));
             }
         }
         results
@@ -380,12 +378,12 @@ impl VerifyExecutor {
                     );
                     match &fuzz_decl.invariant {
                         ast::FuzzInvariant::CrashesNever => {
-                            if call_result.is_err() {
+                            if let Err(e) = call_result {
                                 passed = false;
                                 failure = Some(format!(
                                     "crashed on input {:?}: {}",
                                     args,
-                                    call_result.unwrap_err()
+                                    e
                                 ));
                                 break;
                             }

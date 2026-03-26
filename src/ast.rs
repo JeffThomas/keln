@@ -21,7 +21,7 @@ pub struct Program {
 #[derive(Debug, Clone)]
 pub enum TopLevelDecl {
     TypeDecl(TypeDecl),
-    FnDecl(FnDecl),
+    FnDecl(Box<FnDecl>),
     ModuleDecl(ModuleDecl),
     TrustedModuleDecl(TrustedModuleDecl),
     EffectDecl(EffectDecl),
@@ -284,7 +284,7 @@ pub enum LogicExpr {
     Comparison {
         left: Expr,
         op: ComparisonOp,
-        right: Expr,
+        right: Box<Expr>,
     },
     /// "does not crash" form — just an expression with no comparison
     DoesNotCrash(Expr),
@@ -298,6 +298,7 @@ pub enum LogicExpr {
 // 9. Helper declarations
 // =============================================================================
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum HelperDecl {
     /// name :: effects In -> Out => expr
@@ -311,7 +312,7 @@ pub enum HelperDecl {
         span: Span,
     },
     /// Full fn declaration nested inside helpers block
-    Full(FnDecl),
+    Full(Box<FnDecl>),
 }
 
 // =============================================================================

@@ -22,12 +22,6 @@ pub struct Evaluator {
     pub(crate) variant_fields: HashMap<String, Vec<ast::FieldTypeDecl>>,
 }
 
-impl Default for Evaluator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Evaluator {
     pub fn new() -> Self {
         Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new() }
@@ -40,7 +34,7 @@ impl Evaluator {
     pub fn load_program(&mut self, program: &crate::ast::Program) {
         for decl in &program.declarations {
             match decl {
-                ast::TopLevelDecl::FnDecl(fd) => self.register_fn(fd),
+                ast::TopLevelDecl::FnDecl(fd) => self.register_fn(fd.as_ref()),
                 ast::TopLevelDecl::LetBinding(lb) => {
                     if let Ok(v) = self.eval_expr(&lb.value) {
                         self.bind_pattern_to_env(&lb.pattern, v);
@@ -67,7 +61,7 @@ impl Evaluator {
                                 span: span.clone(),
                             },
                             in_clause: ast::Pattern::Binding("it".to_string(), span.clone()),
-                            out_clause: body.clone(),
+                            out_clause: (*body).clone(),
                             confidence: None,
                             reason: None,
                             proves: None,
@@ -78,7 +72,7 @@ impl Evaluator {
                         };
                         self.fns.insert(name.clone(), helper_decl);
                     }
-                    ast::HelperDecl::Full(inner) => self.register_fn(inner),
+                    ast::HelperDecl::Full(inner) => self.register_fn(inner.as_ref()),
                 }
             }
         }
@@ -351,14 +345,14 @@ impl Evaluator {
                     },
                     None => None,
                 };
-                if let Some(vname) = &variant_name
-                    && let Some(fdecls) = self.variant_fields.get(vname.as_str()).cloned()
-                {
-                    for fdecl in &fdecls {
-                        if let Some(rc) = &fdecl.refinement
-                            && let Some((_, val)) = fvs.iter().find(|(n, _)| n == &fdecl.name)
-                        {
-                            check_refinement(val, rc, &fdecl.name, &fdecl.span)?;
+                if let Some(vname) = &variant_name {
+                    if let Some(fdecls) = self.variant_fields.get(vname.as_str()).cloned() {
+                        for fdecl in &fdecls {
+                            if let Some(rc) = &fdecl.refinement {
+                                if let Some((_, val)) = fvs.iter().find(|(n, _)| n == &fdecl.name) {
+                                    check_refinement(val, rc, &fdecl.name, &fdecl.span)?;
+                                }
+                            }
                         }
                     }
                 }
@@ -395,16 +389,16 @@ impl Evaluator {
             ast::Expr::Select { arms, timeout, span: _ } => {
                 for arm in arms {
                     let chan_val = self.eval_expr(&arm.channel)?;
-                    if let Value::Channel(ch) = chan_val
-                        && let Some(item) = ch.borrow_mut().pop_front()
-                    {
-                        self.env.push_scope();
-                        if arm.binding != "_" {
-                            self.env.bind(&arm.binding, item);
+                    if let Value::Channel(ch) = chan_val {
+                        if let Some(item) = ch.borrow_mut().pop_front() {
+                            self.env.push_scope();
+                            if arm.binding != "_" {
+                                self.env.bind(&arm.binding, item);
+                            }
+                            let result = self.eval_expr(&arm.body)?;
+                            self.env.pop_scope();
+                            return Ok(result);
                         }
-                        let result = self.eval_expr(&arm.body)?;
-                        self.env.pop_scope();
-                        return Ok(result);
                     }
                 }
                 if let Some(ta) = timeout {
@@ -745,18 +739,18 @@ impl Evaluator {
             ast::Pattern::Literal(_) => Ok(()),
             ast::Pattern::UnitVariant(_, _) => Ok(()),
             ast::Pattern::TupleVariant { name, inner, .. } => {
-                if let Value::Variant { name: n, payload: VariantPayload::Tuple(inner_val) } = val
-                    && n == name
-                {
-                    self.bind_pattern(inner, inner_val)?;
+                if let Value::Variant { name: n, payload: VariantPayload::Tuple(inner_val) } = val {
+                    if n == name {
+                        self.bind_pattern(inner, inner_val)?;
+                    }
                 }
                 Ok(())
             }
             ast::Pattern::RecordVariant { name, fields, .. } => {
-                if let Value::Variant { name: n, payload: VariantPayload::Record(fvals) } = val
-                    && n == name
-                {
-                    self.bind_field_patterns(fields, fvals)?;
+                if let Value::Variant { name: n, payload: VariantPayload::Record(fvals) } = val {
+                    if n == name {
+                        self.bind_field_patterns(fields, fvals)?;
+                    }
                 }
                 Ok(())
             }

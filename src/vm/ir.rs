@@ -29,7 +29,7 @@ impl Frame {
     }
 
     pub fn clone_reg(&self, r: usize) -> Result<Value, RuntimeError> {
-        self.read(r).map(|v| v.clone())
+        self.read(r).cloned()
     }
 
     pub fn write(&mut self, r: usize, v: Value) {
@@ -83,6 +83,12 @@ pub struct ConstantTable {
     int_idx:  HashMap<i64, u32>,
     bool_idx: [Option<u32>; 2],   // [false_idx, true_idx]
     unit_idx: Option<u32>,
+}
+
+impl Default for ConstantTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConstantTable {
@@ -149,6 +155,12 @@ pub struct TagTable {
     index: HashMap<String, u32>,
 }
 
+impl Default for TagTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TagTable {
     pub fn new() -> Self {
         TagTable { names: Vec::new(), index: HashMap::new() }
@@ -180,6 +192,12 @@ pub struct RecordLayoutTable {
     pub layouts: HashMap<String, Vec<String>>,
     /// layout_idx → type_name (for MAKE_RECORD)
     pub by_idx: Vec<String>,
+}
+
+impl Default for RecordLayoutTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RecordLayoutTable {
@@ -289,6 +307,12 @@ pub static BUILTIN_NAMES: &[&str] = &[
 
 pub struct BuiltinTable {
     index: HashMap<String, u16>,
+}
+
+impl Default for BuiltinTable {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BuiltinTable {
@@ -507,6 +531,12 @@ pub struct KelnModule {
     pub constants: ConstantTable,
     pub tags: TagTable,
     pub layouts: RecordLayoutTable,
+}
+
+impl Default for KelnModule {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl KelnModule {

@@ -388,19 +388,19 @@ fn execute(module: &KelnModule, fn_idx: usize, arg: Value) -> Result<Value, Exec
                 let mut selected: Option<Value> = None;
                 for arm in arms {
                     let chan = frame.clone_reg(arm.channel_reg)?;
-                    if let Value::Channel(rc) = &chan {
-                        if let Some(v) = rc.borrow_mut().pop_front() {
-                            // Write received value into the binding register so the
-                            // arm body can look it up by name. binding_reg == 0 means
-                            // wildcard `_` — don't overwrite R0 (the fn input).
-                            if arm.binding_reg != 0 {
-                                frame.write(arm.binding_reg, v);
-                            }
-                            selected = Some(Value::Unit);
-                            // Execute the arm body inline by adjusting ip
-                            ip = arm.body_ip;
-                            break;
+                    if let Value::Channel(rc) = &chan
+                        && let Some(v) = rc.borrow_mut().pop_front()
+                    {
+                        // Write received value into the binding register so the
+                        // arm body can look it up by name. binding_reg == 0 means
+                        // wildcard `_` — don't overwrite R0 (the fn input).
+                        if arm.binding_reg != 0 {
+                            frame.write(arm.binding_reg, v);
                         }
+                        selected = Some(Value::Unit);
+                        // Execute the arm body inline by adjusting ip
+                        ip = arm.body_ip;
+                        break;
                     }
                 }
                 if selected.is_none() {
@@ -433,22 +433,22 @@ fn execute(module: &KelnModule, fn_idx: usize, arg: Value) -> Result<Value, Exec
             // Refinement checks (no-op in release; check in debug)
             // ------------------------------------------------------------------
             Instruction::CheckRange { src, lo, hi } => {
-                if let Value::Int(n) = frame.clone_reg(*src)? {
-                    if n < *lo || n > *hi {
-                        return Err(ExecError::new(format!(
-                            "CHECK_RANGE: {} not in {}..{}", n, lo, hi
-                        )));
-                    }
+                if let Value::Int(n) = frame.clone_reg(*src)?
+                    && (n < *lo || n > *hi)
+                {
+                    return Err(ExecError::new(format!(
+                        "CHECK_RANGE: {} not in {}..{}", n, lo, hi
+                    )));
                 }
                 ip += 1;
             }
             Instruction::CheckRangeF { src, lo, hi } => {
-                if let Value::Float(f) = frame.clone_reg(*src)? {
-                    if f < *lo || f > *hi {
-                        return Err(ExecError::new(format!(
-                            "CHECK_RANGE_F: {} not in {}..{}", f, lo, hi
-                        )));
-                    }
+                if let Value::Float(f) = frame.clone_reg(*src)?
+                    && (f < *lo || f > *hi)
+                {
+                    return Err(ExecError::new(format!(
+                        "CHECK_RANGE_F: {} not in {}..{}", f, lo, hi
+                    )));
                 }
                 ip += 1;
             }

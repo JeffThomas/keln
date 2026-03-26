@@ -16,6 +16,12 @@ pub struct Checker {
     current_effects: EffectSet,
 }
 
+impl Default for Checker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Checker {
     pub fn new() -> Self {
         Checker {
@@ -231,13 +237,11 @@ impl Checker {
 
         // If the function declares Never return type, validate that the out expression
         // is a tail call (direct recursion) or a do block ending in a tail call (spec §3.1)
-        if sig.output == Type::Never {
-            if !self.is_valid_never_expr(&fd.out_clause, &fd.name) {
-                self.err(
-                    "function returning Never must end with a tail call to itself (directly or as the final expression of a do block)",
-                    &fd.span,
-                );
-            }
+        if sig.output == Type::Never && !self.is_valid_never_expr(&fd.out_clause, &fd.name) {
+            self.err(
+                "function returning Never must end with a tail call to itself (directly or as the final expression of a do block)",
+                &fd.span,
+            );
         }
 
         // Check verify block if present
@@ -504,17 +508,17 @@ impl Checker {
                         }
                         _ => {
                             // Could be a named function — look it up
-                            if let ast::Expr::Var(name, _) = step {
-                                if let Some(sig) = self.env.lookup_fn(name).cloned() {
-                                    if !sig.effects.is_subset_of(&self.current_effects) {
-                                        self.err(
-                                            format!("pipeline step '{}' requires effects {} but context only has {}", name, sig.effects, self.current_effects),
-                                            span,
-                                        );
-                                    }
-                                    ty = sig.output;
-                                    continue;
+                            if let ast::Expr::Var(name, _) = step
+                                && let Some(sig) = self.env.lookup_fn(name).cloned()
+                            {
+                                if !sig.effects.is_subset_of(&self.current_effects) {
+                                    self.err(
+                                        format!("pipeline step '{}' requires effects {} but context only has {}", name, sig.effects, self.current_effects),
+                                        span,
+                                    );
                                 }
+                                ty = sig.output;
+                                continue;
                             }
                             ty = Type::TypeVar("_unknown".to_string());
                         }
@@ -542,13 +546,11 @@ impl Checker {
                         .unwrap_or(Type::Never);
 
                     for (i, arm_ty) in arm_types.iter().enumerate() {
-                        if !arm_ty.is_never() && *arm_ty != result_ty {
-                            if !self.types_compatible(arm_ty, &result_ty) {
-                                self.err(
-                                    format!("match arm {} has type {} but expected {}", i, arm_ty, result_ty),
-                                    span,
-                                );
-                            }
+                        if !arm_ty.is_never() && *arm_ty != result_ty && !self.types_compatible(arm_ty, &result_ty) {
+                            self.err(
+                                format!("match arm {} has type {} but expected {}", i, arm_ty, result_ty),
+                                span,
+                            );
                         }
                     }
                     result_ty
@@ -797,16 +799,16 @@ impl Checker {
             }
             _ => {
                 // Try looking up as a named function
-                if let ast::Expr::Var(name, _) = function {
-                    if let Some(sig) = self.env.lookup_fn(name).cloned() {
-                        if !sig.effects.is_subset_of(&self.current_effects) {
-                            self.err(
-                                format!("call to '{}' requires effects {} but context only has {}", name, sig.effects, self.current_effects),
-                                span,
-                            );
-                        }
-                        return sig.output;
+                if let ast::Expr::Var(name, _) = function
+                    && let Some(sig) = self.env.lookup_fn(name).cloned()
+                {
+                    if !sig.effects.is_subset_of(&self.current_effects) {
+                        self.err(
+                            format!("call to '{}' requires effects {} but context only has {}", name, sig.effects, self.current_effects),
+                            span,
+                        );
                     }
+                    return sig.output;
                 }
                 Type::TypeVar("_unknown".to_string())
             }
@@ -832,12 +834,11 @@ impl Checker {
             }
 
             // Check if it's a variant constructor: Type.Variant
-            if let Some(td) = self.env.lookup_type(module).cloned() {
-                if let TypeDef::Sum { variants, .. } = &td {
-                    if variants.iter().any(|v| v.name == *method) {
-                        return Type::Named(module.clone());
-                    }
-                }
+            if let Some(td) = self.env.lookup_type(module).cloned()
+                && let TypeDef::Sum { variants, .. } = &td
+                && variants.iter().any(|v| v.name == *method)
+            {
+                return Type::Named(module.clone());
             }
         }
 
@@ -994,39 +995,39 @@ impl Checker {
             return true;
         }
         // Named type could be an alias
-        if let (Type::Named(a_name), _) = (a, b) {
-            if let Some(td) = self.env.lookup_type(a_name) {
-                if let TypeDef::Alias { target, .. } = td {
-                    return self.types_compatible(target, b);
-                }
-                if let TypeDef::Refinement { base, .. } = td {
-                    return self.types_compatible(base, b);
-                }
+        if let (Type::Named(a_name), _) = (a, b)
+            && let Some(td) = self.env.lookup_type(a_name)
+        {
+            if let TypeDef::Alias { target, .. } = td {
+                return self.types_compatible(target, b);
+            }
+            if let TypeDef::Refinement { base, .. } = td {
+                return self.types_compatible(base, b);
             }
         }
-        if let (_, Type::Named(b_name)) = (a, b) {
-            if let Some(td) = self.env.lookup_type(b_name) {
-                if let TypeDef::Alias { target, .. } = td {
-                    return self.types_compatible(a, target);
-                }
-                if let TypeDef::Refinement { base, .. } = td {
-                    return self.types_compatible(a, base);
-                }
+        if let (_, Type::Named(b_name)) = (a, b)
+            && let Some(td) = self.env.lookup_type(b_name)
+        {
+            if let TypeDef::Alias { target, .. } = td {
+                return self.types_compatible(a, target);
+            }
+            if let TypeDef::Refinement { base, .. } = td {
+                return self.types_compatible(a, base);
             }
         }
         // Generic types — check name and args
-        if let (Type::Generic { name: a_name, args: a_args }, Type::Generic { name: b_name, args: b_args }) = (a, b) {
-            if a_name == b_name && a_args.len() == b_args.len() {
-                return a_args.iter().zip(b_args.iter()).all(|(a, b)| self.types_compatible(a, b));
-            }
+        if let (Type::Generic { name: a_name, args: a_args }, Type::Generic { name: b_name, args: b_args }) = (a, b)
+            && a_name == b_name && a_args.len() == b_args.len()
+        {
+            return a_args.iter().zip(b_args.iter()).all(|(a, b)| self.types_compatible(a, b));
         }
         // Record types — structural compatibility
-        if let (Type::Record(a_fields), Type::Record(b_fields)) = (a, b) {
-            if a_fields.len() == b_fields.len() {
-                return a_fields.iter().all(|(name, ty)| {
-                    b_fields.iter().any(|(bn, bt)| bn == name && self.types_compatible(ty, bt))
-                });
-            }
+        if let (Type::Record(a_fields), Type::Record(b_fields)) = (a, b)
+            && a_fields.len() == b_fields.len()
+        {
+            return a_fields.iter().all(|(name, ty)| {
+                b_fields.iter().any(|(bn, bt)| bn == name && self.types_compatible(ty, bt))
+            });
         }
         // List types
         if let (Type::List(a_elem), Type::List(b_elem)) = (a, b) {

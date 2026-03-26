@@ -211,6 +211,12 @@ pub struct Lowerer {
     user_fns: HashSet<String>,
 }
 
+impl Default for Lowerer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Lowerer {
     pub fn new() -> Self {
         Lowerer {
@@ -713,12 +719,7 @@ impl Lowerer {
                     }
                 } else {
                     // Unknown qualified name — dispatch via stdlib fallback at runtime
-                    let arg_regs = arg_regs;
-                    let builtin_fallback = self.builtins.lookup(&name).unwrap_or_else(|| {
-                        // Register as a "dynamic" call by using an unknown builtin idx
-                        // This will produce a RuntimeError at exec time if not found
-                        u16::MAX
-                    });
+                    let builtin_fallback = self.builtins.lookup(&name).unwrap_or(u16::MAX);
                     let dst = ctx.alloc_reg();
                     ctx.emit(Instruction::CallBuiltin { dst, builtin: builtin_fallback, args: arg_regs });
                     Ok(dst)
@@ -1044,6 +1045,7 @@ impl Lowerer {
     /// - On MATCH: jumps to `body_label`.
     /// - On NO MATCH: falls through (caller should emit JUMP next_arm after this returns).
     /// - `fail_label`: used by record patterns for intermediate field test failures.
+    ///
     /// Returns `true` if the pattern always matches (wildcard/binding — no conditional test).
     fn emit_pattern_test(
         &mut self,

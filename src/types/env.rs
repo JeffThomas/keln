@@ -23,6 +23,12 @@ pub struct TypeEnv {
     pub known_effects: HashMap<String, Vec<FnSig>>,
 }
 
+impl Default for TypeEnv {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeEnv {
     pub fn new() -> Self {
         let mut env = TypeEnv {

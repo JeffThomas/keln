@@ -203,7 +203,7 @@ impl Parser {
     fn parse_top_level_decl(&mut self) -> Result<TopLevelDecl, ParseError> {
         match self.peek_value() {
             Some("type") => Ok(TopLevelDecl::TypeDecl(self.parse_type_decl()?)),
-            Some("fn") => Ok(TopLevelDecl::FnDecl(self.parse_fn_decl()?)),
+            Some("fn") => Ok(TopLevelDecl::FnDecl(Box::new(self.parse_fn_decl()?))),
             Some("module") => Ok(TopLevelDecl::ModuleDecl(self.parse_module_decl()?)),
             Some("trusted") => Ok(TopLevelDecl::TrustedModuleDecl(self.parse_trusted_module_decl()?)),
             Some("effect") => Ok(TopLevelDecl::EffectDecl(self.parse_effect_decl()?)),
@@ -250,18 +250,17 @@ impl Parser {
         if self.check_symbol("{") {
             return Ok(TypeDef::Product(self.parse_product_type_fields()?));
         }
-        if let Some(t) = self.peek() {
-            if t.token_type == TT_WORD && t.value.starts_with(|c: char| c.is_ascii_uppercase()) {
-                if let Some(next) = self.peek_nth(1) {
-                    if next.token_type == TT_SYMBOL && next.value == "|" {
-                        return Ok(TypeDef::Sum(self.parse_sum_type_def()?));
-                    }
-                    if (next.token_type == TT_SYMBOL && (next.value == "{" || next.value == "("))
-                        && !self.is_generic_type_start()
-                    {
-                        return Ok(TypeDef::Sum(self.parse_sum_type_def()?));
-                    }
-                }
+        if let Some(t) = self.peek()
+            && t.token_type == TT_WORD && t.value.starts_with(|c: char| c.is_ascii_uppercase())
+            && let Some(next) = self.peek_nth(1)
+        {
+            if next.token_type == TT_SYMBOL && next.value == "|" {
+                return Ok(TypeDef::Sum(self.parse_sum_type_def()?));
+            }
+            if (next.token_type == TT_SYMBOL && (next.value == "{" || next.value == "("))
+                && !self.is_generic_type_start()
+            {
+                return Ok(TypeDef::Sum(self.parse_sum_type_def()?));
             }
         }
         let type_expr = self.parse_type_expr()?;
@@ -768,7 +767,7 @@ impl Parser {
                 if self.is_comparison_op() {
                     let op = self.parse_comparison_op()?;
                     let right = self.parse_expr()?;
-                    Ok(LogicExpr::Comparison { left, op, right })
+                    Ok(LogicExpr::Comparison { left, op, right: Box::new(right) })
                 } else {
                     Ok(LogicExpr::DoesNotCrash(left))
                 }
@@ -785,7 +784,7 @@ impl Parser {
         let mut helpers = vec![];
         while !self.check_symbol("}") {
             if self.check_keyword("fn") {
-                helpers.push(HelperDecl::Full(self.parse_fn_decl()?));
+                helpers.push(HelperDecl::Full(Box::new(self.parse_fn_decl()?)));
             } else {
                 helpers.push(self.parse_compact_helper()?);
             }
@@ -1064,17 +1063,15 @@ impl Parser {
     }
 
     fn parse_arg(&mut self) -> Result<Arg, ParseError> {
-        if let Some(t) = self.peek() {
-            if t.token_type == TT_WORD && t.value.starts_with(|c: char| c.is_ascii_lowercase()) {
-                if let Some(next) = self.peek_nth(1) {
-                    if next.token_type == TT_SYMBOL && next.value == ":" {
-                        let (name, _) = self.expect_lower_ident()?;
-                        self.advance()?; // :
-                        let value = self.parse_expr()?;
-                        return Ok(Arg::Named(name, Box::new(value)));
-                    }
-                }
-            }
+        if let Some(t) = self.peek()
+            && t.token_type == TT_WORD && t.value.starts_with(|c: char| c.is_ascii_lowercase())
+            && let Some(next) = self.peek_nth(1)
+            && next.token_type == TT_SYMBOL && next.value == ":"
+        {
+            let (name, _) = self.expect_lower_ident()?;
+            self.advance()?; // :
+            let value = self.parse_expr()?;
+            return Ok(Arg::Named(name, Box::new(value)));
         }
         Ok(Arg::Positional(Box::new(self.parse_expr()?)))
     }

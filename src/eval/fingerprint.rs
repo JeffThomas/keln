@@ -76,7 +76,7 @@ fn shape_expr(e: &Expr) -> String {
         Expr::UpperVar(_, _) => "Variant".to_string(),
         Expr::QualifiedName(parts, _) => format!("Ref({})", parts.join(".")),
         Expr::BinaryOp { op, left, right, .. } => {
-            format!("BinOp({},{},{})", format!("{:?}", op), shape_expr(left), shape_expr(right))
+            format!("BinOp({:?},{},{})", op, shape_expr(left), shape_expr(right))
         }
         Expr::Call { function, args, .. } => {
             let fn_shape = shape_expr(function);
@@ -163,7 +163,7 @@ mod tests {
     fn decl(src: &str) -> ast::FnDecl {
         let prog = parse(src).expect("parse failed");
         prog.declarations.into_iter().find_map(|d| {
-            if let ast::TopLevelDecl::FnDecl(fd) = d { Some(fd) } else { None }
+            if let ast::TopLevelDecl::FnDecl(fd) = d { Some(*fd) } else { None }
         }).expect("no fn decl found")
     }
 
