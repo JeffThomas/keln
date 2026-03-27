@@ -510,6 +510,8 @@ pub enum Instruction {
     // Channel operations
     // =========================================================================
     ChanNew   { dst: usize },
+    /// Create a closeable channel; CHAN_CLOSE is valid on this channel.
+    ChanNewCloseable { dst: usize },
     /// Rchan cloned; Rval MOVED. RuntimeError if channel is closed.
     ChanSend  { chan_reg: usize, val_reg: usize },
     /// Rchan cloned; returns T directly. RuntimeError on empty or closed channel.

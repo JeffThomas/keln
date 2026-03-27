@@ -122,6 +122,14 @@
     | <sum_type_ref>       (* reference to a named sum type *)
     | <function_ref_type>
     | <never_type>
+    | <typeref_type>       (* TypeRef<T> — compile-time type descriptor *)
+    | <closeable_type>     (* Closeable<Channel<T>> — closeable channel wrapper *)
+
+<typeref_type>
+    = "TypeRef" "<" <type_expr> ">"
+
+<closeable_type>
+    = "Closeable" "<" <type_expr> ">"
 
 <primitive_type>
     = "Int"
@@ -269,7 +277,14 @@
 -- 6.1 Top-level function
 
 <fn_decl>
-    = "fn" <lower_ident> "{" <fn_body> "}"
+    = "fn" <lower_ident> [<type_params>] "{" <fn_body> "}"
+
+<type_params>
+    = "[" <type_param> {"," <type_param>} "]"
+
+<type_param>
+    = <upper_ident>                       (* type variable, e.g. T *)
+    | <upper_ident> ":" "Effect"          (* effect variable, e.g. E : Effect *)
 
 <fn_body>
     = <fn_signature>
@@ -283,7 +298,10 @@
       [<fn_helpers_clause>]
 
 <fn_signature>
-    = <effect_set> <type_expr> "->" <type_expr>
+    = <effect_set> <type_expr> "->" <type_expr> [<effect_constraint>]
+
+<effect_constraint>
+    = "|" "effect" <upper_ident>          (* e.g. | effect E — constrains effect to param E *)
 
 <fn_in_clause>
     = "in:" <pattern>
@@ -584,12 +602,21 @@
 
 <channel_recv>
     = "<-" <expr>
-    (* expr must have type Channel<T>; result has type T *)
-    (* blocks until a value is available *)
+    (* expr has type Channel<T>           → result has type T          (lowers to CHAN_RECV)      *)
+    (* expr has type Closeable<Channel<T>>→ result has type Maybe<T>   (lowers to CHAN_RECV_MAYBE)*)
+    (* Closeable channel receive must appear in a match context         *)
 
 <channel_new_expr>
     = "Channel" "." "new" "<" <type_expr> ">" "(" ")"
-    (* empty parentheses required; Channel.new<T> without () is a type reference *)
+    (* result: Channel<T> — standard channel; CHAN_RECV safe *)
+    | "Channel" "." "newCloseable" "<" <type_expr> ">" "(" ")"
+    (* result: Closeable<Channel<T>> — may be closed; receive returns Maybe<T> *)
+
+<type_ref_expr>
+    = <type_expr> "." "ref"
+    (* valid only in value position where TypeRef<T> is expected *)
+    (* e.g. JobMessage.ref : TypeRef<JobMessage> *)
+    (* T must be a concrete, fully-instantiated type at the call site  *)
 
 -- 8.10 Clone expression
 

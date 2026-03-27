@@ -638,6 +638,23 @@ impl Lowerer {
                 ctx.emit(Instruction::ChanNew { dst });
                 Ok(dst)
             }
+            Expr::ChannelNewCloseable { .. } => {
+                let dst = ctx.alloc_reg();
+                ctx.emit(Instruction::ChanNewCloseable { dst });
+                Ok(dst)
+            }
+            Expr::TypeRefExpr(type_expr, _) => {
+                let name = match type_expr {
+                    ast::TypeExpr::Named(n, _) => n.clone(),
+                    ast::TypeExpr::Primitive(p, _) => format!("{:?}", p),
+                    ast::TypeExpr::Generic { name, .. } => name.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                let dst = ctx.alloc_reg();
+                let const_idx = self.module.constants.intern_str(&name);
+                ctx.emit(Instruction::LoadStr { dst, const_idx });
+                Ok(dst)
+            }
             Expr::ChannelSend { channel, value, .. } => {
                 let chan_reg = self.lower_expr(ctx, channel, false)?;
                 let val_reg = self.lower_expr(ctx, value, false)?;

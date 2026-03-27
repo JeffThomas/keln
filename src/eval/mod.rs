@@ -19,13 +19,18 @@ use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct ChannelInner {
-    pub queue:  VecDeque<Value>,
-    pub closed: bool,
+    pub queue:     VecDeque<Value>,
+    pub closed:    bool,
+    pub closeable: bool,
 }
 
 impl ChannelInner {
     pub fn new() -> Self {
-        ChannelInner { queue: VecDeque::new(), closed: false }
+        ChannelInner { queue: VecDeque::new(), closed: false, closeable: false }
+    }
+
+    pub fn new_closeable() -> Self {
+        ChannelInner { queue: VecDeque::new(), closed: false, closeable: true }
     }
 }
 
@@ -68,6 +73,9 @@ pub enum Value {
     Map(Vec<(Value, Value)>),
     /// Ordered unique set (linear scan; elements compared by PartialEq)
     Set(Vec<Value>),
+    /// Compile-time phantom type descriptor — runtime representation of TypeRef<T>.
+    /// Value is the type name string (e.g. "JobMessage", "Int").
+    TypeRef(String),
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +196,7 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::TypeRef(name) => write!(f, "TypeRef<{}>", name),
         }
     }
 }

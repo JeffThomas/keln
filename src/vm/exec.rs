@@ -415,6 +415,14 @@ fn exec_step(
             *ip += 1;
         }
 
+        Instruction::ChanNewCloseable { dst } => {
+            use std::cell::RefCell;
+            use std::rc::Rc;
+            let ch = Rc::new(RefCell::new(ChannelInner::new_closeable()));
+            frame.write(*dst, Value::Channel(ch));
+            *ip += 1;
+        }
+
         Instruction::ChanSend { chan_reg, val_reg } => {
             let val = frame.take(*val_reg)?;
             let chan = frame.clone_reg(*chan_reg)?;
@@ -474,7 +482,13 @@ fn exec_step(
         Instruction::ChanClose { chan_reg } => {
             let chan = frame.clone_reg(*chan_reg)?;
             match chan {
-                Value::Channel(rc) => rc.borrow_mut().closed = true,
+                Value::Channel(rc) => {
+                    let mut inner = rc.borrow_mut();
+                    if !inner.closeable {
+                        return Err(ExecError::new("CHAN_CLOSE: channel was not created with Channel.newCloseable"));
+                    }
+                    inner.closed = true;
+                }
                 other => return Err(ExecError::new(format!("CHAN_CLOSE: expected channel, got {}", other))),
             }
             *ip += 1;

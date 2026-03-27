@@ -500,6 +500,26 @@ impl Parser {
     fn parse_fn_decl(&mut self) -> Result<FnDecl, ParseError> {
         let span = self.expect_keyword("fn")?;
         let (name, _) = self.expect_lower_ident()?;
+        let type_params = if self.check_symbol("[") {
+            self.advance()?;
+            let mut params = vec![];
+            let (p, _) = self.expect_upper_ident()?;
+            params.push(p);
+            while self.check_symbol(",") {
+                self.advance()?;
+                // Handle "E : Effect" form — just take the name, ignore the : Effect annotation
+                let (p, _) = self.expect_upper_ident()?;
+                if self.check_symbol(":") {
+                    self.advance()?; // consume ':'
+                    self.expect_upper_ident()?; // consume 'Effect' (or whatever)
+                }
+                params.push(p);
+            }
+            self.expect_symbol("]")?;
+            params
+        } else {
+            vec![]
+        };
         self.expect_symbol("{")?;
         let signature = self.parse_fn_signature()?;
 
@@ -551,7 +571,7 @@ impl Parser {
         self.expect_symbol("}")?;
 
         Ok(FnDecl {
-            name, signature, in_clause, out_clause,
+            name, type_params, signature, in_clause, out_clause,
             confidence, reason, proves, provenance, verify, helpers, span,
         })
     }
@@ -1138,6 +1158,29 @@ impl Parser {
                         self.expect_symbol("(")?;
                         self.expect_symbol(")")?;
                         return Ok(Expr::ChannelNew { element_type, span });
+                    }
+                    // Channel.newCloseable<T>() — closeable channel construction
+                    if parts.len() == 2 && parts[0] == "Channel" && parts[1] == "newCloseable" && self.check_symbol("<") {
+                        self.advance()?; // consume <
+                        let element_type = self.parse_type_expr()?;
+                        self.expect_symbol(">")?;
+                        self.expect_symbol("(")?;
+                        self.expect_symbol(")")?;
+                        return Ok(Expr::ChannelNewCloseable { element_type, span });
+                    }
+                    // T.ref — TypeRef expression (e.g. MyType.ref, Int.ref)
+                    if parts.last().map(|s| s.as_str()) == Some("ref") && parts.len() >= 2 {
+                        // Reconstruct the type from all parts except the final "ref"
+                        let type_parts = &parts[..parts.len() - 1];
+                        // Build a TypeExpr::Named or TypeExpr::Generic from the parts
+                        // For simple case: single-part type name
+                        let type_expr = if type_parts.len() == 1 {
+                            TypeExpr::Named(type_parts[0].clone(), span.clone())
+                        } else {
+                            // Qualified type — for now, use the last part as the type name
+                            TypeExpr::Named(type_parts.last().unwrap().clone(), span.clone())
+                        };
+                        return Ok(Expr::TypeRefExpr(type_expr, span));
                     }
                     return Ok(Expr::QualifiedName(parts, span));
                 }

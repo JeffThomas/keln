@@ -95,8 +95,8 @@ impl Checker {
 
     fn register_fn_decl(&mut self, fd: &ast::FnDecl) {
         let effects = EffectSet::from_names(&fd.signature.effects.effects);
-        let input = self.resolve_type_expr(&fd.signature.input_type, &[]);
-        let output = self.resolve_type_expr(&fd.signature.output_type, &[]);
+        let input = self.resolve_type_expr(&fd.signature.input_type, &fd.type_params);
+        let output = self.resolve_type_expr(&fd.signature.output_type, &fd.type_params);
         self.env.register_fn(&fd.name, FnSig { effects, input, output });
     }
 
@@ -163,6 +163,14 @@ impl Checker {
                     "List" if resolved_args.len() == 1 => Type::List(Box::new(resolved_args[0].clone())),
                     "Channel" if resolved_args.len() == 1 => Type::Channel(Box::new(resolved_args[0].clone())),
                     "Task" if resolved_args.len() == 1 => Type::Task(Box::new(resolved_args[0].clone())),
+                    "TypeRef" if resolved_args.len() == 1 => Type::TypeRef(Box::new(resolved_args[0].clone())),
+                    "Closeable" if resolved_args.len() == 1 => {
+                        // Closeable<Channel<T>> → CloseableChannel(T)
+                        match &resolved_args[0] {
+                            Type::Channel(inner) => Type::CloseableChannel(inner.clone()),
+                            other => Type::Generic { name: "Closeable".to_string(), args: vec![other.clone()] }
+                        }
+                    }
                     _ => Type::Generic { name: name.clone(), args: resolved_args }
                 }
             }
@@ -330,6 +338,14 @@ impl Checker {
                 self.env.push_scope();
                 for binding in &fa.bindings {
                     let ty = self.resolve_type_expr(&binding.type_expr, &[]);
+                    // Non-samplable type check for forall bindings
+                    if self.is_non_samplable(&ty) {
+                        self.err(
+                            format!("forall variable '{}' has non-samplable type {}; Channel<T>, Task<T>, and module instances cannot be sampled",
+                                    binding.name, ty),
+                            &binding.span,
+                        );
+                    }
                     self.env.bind(&binding.name, ty);
                 }
                 self.check_logic_expr(&fa.body);
@@ -673,6 +689,13 @@ impl Checker {
                 let chan_ty = self.infer_expr(channel);
                 match &chan_ty {
                     Type::Channel(inner) => inner.as_ref().clone(),
+                    Type::CloseableChannel(inner) => {
+                        // CHAN_RECV_MAYBE: returns Maybe<T>
+                        Type::Generic {
+                            name: "Maybe".to_string(),
+                            args: vec![inner.as_ref().clone()],
+                        }
+                    }
                     _ => {
                         self.err(format!("expected Channel type, got {}", chan_ty), span);
                         Type::TypeVar("_error".to_string())
@@ -688,6 +711,19 @@ impl Checker {
                 Type::Channel(Box::new(elem_ty))
             }
 
+            ast::Expr::ChannelNewCloseable { element_type, span } => {
+                if !self.current_effects.effects.contains("IO") {
+                    self.err("Channel.newCloseable requires IO effect", span);
+                }
+                let elem_ty = self.resolve_type_expr(element_type, &[]);
+                Type::CloseableChannel(Box::new(elem_ty))
+            }
+
+            ast::Expr::TypeRefExpr(type_expr, _span) => {
+                let inner = self.resolve_type_expr(type_expr, &[]);
+                Type::TypeRef(Box::new(inner))
+            }
+
             ast::Expr::Clone(inner, _) => {
                 self.infer_expr(inner)
                 // Clone returns the same type
@@ -695,17 +731,60 @@ impl Checker {
 
             ast::Expr::With { function, binding, span } => {
                 let fn_ty = self.infer_expr(function);
-                match &fn_ty {
-                    Type::FunctionRef { effects: _, input: _, output: _ } => {
-                        // .with produces a new FunctionRef with some params bound
-                        // For now, return a FunctionRef with same effects/output
-                        match binding {
-                            ast::WithBinding::Named(_, val) => { self.infer_expr(val); }
-                            ast::WithBinding::Record(fields) => {
-                                for fv in fields { self.infer_expr(&fv.value); }
+                match fn_ty.clone() {
+                    Type::FunctionRef { effects, input, output } => {
+                        // Validate bound fields exist in the record input type
+                        let bound_fields: Vec<(String, Type)> = match binding {
+                            ast::WithBinding::Named(name, val) => {
+                                let val_ty = self.infer_expr(val);
+                                vec![(name.clone(), val_ty)]
                             }
+                            ast::WithBinding::Record(fields) => {
+                                fields.iter().map(|fv| {
+                                    let val_ty = self.infer_expr(&fv.value);
+                                    (fv.name.clone(), val_ty)
+                                }).collect()
+                            }
+                        };
+                        // Compute remaining input type via record subtraction
+                        let remaining_input = match *input {
+                            Type::Record(ref record_fields) => {
+                                let mut remaining = record_fields.clone();
+                                for (bound_name, bound_ty) in &bound_fields {
+                                    if let Some(pos) = remaining.iter().position(|(n, _)| n == bound_name) {
+                                        let (_, field_ty) = &remaining[pos];
+                                        let field_ty = field_ty.clone();
+                                        self.check_assignable(bound_ty, &field_ty, span);
+                                        remaining.remove(pos);
+                                    } else {
+                                        self.err(
+                                            format!("field '{}' does not exist in input type {}", bound_name, input),
+                                            span,
+                                        );
+                                    }
+                                }
+                                if remaining.is_empty() {
+                                    Type::Unit
+                                } else {
+                                    Type::Record(remaining)
+                                }
+                            }
+                            Type::Unit if bound_fields.is_empty() => Type::Unit,
+                            other => {
+                                if !bound_fields.is_empty() {
+                                    self.err(
+                                        format!(".with() requires a record input type; {} is not a record", other),
+                                        span,
+                                    );
+                                }
+                                other
+                            }
+                        };
+                        Type::FunctionRef {
+                            effects,
+                            input: Box::new(remaining_input),
+                            output,
                         }
-                        fn_ty.clone()
                     }
                     _ => {
                         self.err(format!("cannot use .with on non-FunctionRef type {}", fn_ty), span);
@@ -1037,6 +1116,14 @@ impl Checker {
         if let (Type::Channel(a_elem), Type::Channel(b_elem)) = (a, b) {
             return self.types_compatible(a_elem, b_elem);
         }
+        // CloseableChannel types
+        if let (Type::CloseableChannel(a_elem), Type::CloseableChannel(b_elem)) = (a, b) {
+            return self.types_compatible(a_elem, b_elem);
+        }
+        // TypeRef types
+        if let (Type::TypeRef(a_inner), Type::TypeRef(b_inner)) = (a, b) {
+            return self.types_compatible(a_inner, b_inner);
+        }
         false
     }
 
@@ -1073,6 +1160,10 @@ impl Checker {
     // Type variable substitution (for generic instantiation)
     // =========================================================================
 
+    fn is_non_samplable(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Channel(_) | Type::CloseableChannel(_) | Type::Task(_))
+    }
+
     fn substitute_type_vars(&self, ty: &Type, context: &Type) -> Type {
         // Simple: if ty is a TypeVar, return context. For real generic instantiation
         // we'd build a substitution map. This is a simplified version.
@@ -1098,10 +1189,12 @@ impl Checker {
             ast::Expr::Match { span, .. } | ast::Expr::Record { span, .. } |
             ast::Expr::DoBlock { span, .. } | ast::Expr::Select { span, .. } |
             ast::Expr::ChannelSend { span, .. } | ast::Expr::ChannelNew { span, .. } |
+            ast::Expr::ChannelNewCloseable { span, .. } |
             ast::Expr::With { span, .. } | ast::Expr::BinaryOp { span, .. } |
             ast::Expr::FieldAccess { span, .. } => span.clone(),
             ast::Expr::List(_, s) => s.clone(),
             ast::Expr::Let(lb) => lb.span.clone(),
+            ast::Expr::TypeRefExpr(_, s) => s.clone(),
         }
     }
 }

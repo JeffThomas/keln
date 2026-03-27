@@ -119,6 +119,8 @@ fn shape_expr(e: &Expr) -> String {
         Expr::ChannelSend { .. } => "ChSend".to_string(),
         Expr::ChannelRecv(_, _) => "ChRecv".to_string(),
         Expr::ChannelNew { .. } => "ChNew".to_string(),
+        Expr::ChannelNewCloseable { .. } => "ChNewCloseable".to_string(),
+        Expr::TypeRefExpr(_, _) => "TypeRef".to_string(),
         Expr::Clone(inner, _) => format!("Clone({})", shape_expr(inner)),
         Expr::With { function, binding, .. } => {
             let b = match binding {

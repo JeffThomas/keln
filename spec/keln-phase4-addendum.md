@@ -191,7 +191,9 @@ SELECT R_result,
 ### Resolution: CHAN_CLOSE, CHAN_RECV_MAYBE, and CHAN_RECV (unchanged)
 
 ```
-CHAN_CLOSE   Rchan              -- mark channel as closed; Rchan cloned (handle remains valid)
+CHAN_CLOSE   Rchan              -- mark channel as closed; Rchan must have type Closeable<Channel<T>>
+                               -- type checker enforces: CHAN_CLOSE on Channel<T> is a compile error
+                               -- Rchan cloned (handle remains valid after close)
                                -- subsequent CHAN_SEND on a closed channel → RuntimeError
                                -- subsequent CHAN_RECV on a closed channel → RuntimeError
                                -- subsequent CHAN_RECV_MAYBE on a closed empty channel → Maybe::none()
@@ -221,11 +223,17 @@ CHAN_RECV_MAYBE  Rdst, Rchan   -- returns Maybe<T>
                                --            or receives a channel that may be closed
 ```
 
-**Lowering rule:** The lowering pass emits `CHAN_RECV` when the channel's type
-is `Channel<T>` and the channel is not known to be closeable. It emits
-`CHAN_RECV_MAYBE` when the channel may be closed — which is only the case when:
-1. `CHAN_CLOSE` has been called on this channel in the current scope, OR
-2. The channel was received as a parameter typed `Closeable<Channel<T>>`
+**Lowering rule:** The lowering pass emits instructions based solely on the
+static type of the channel expression — no scope analysis required:
+
+- `Channel<T>` → `CHAN_RECV` (returns `T`; RuntimeError on closed or empty)
+- `Closeable<Channel<T>>` → `CHAN_RECV_MAYBE` (returns `Maybe<T>`)
+
+The type of the channel value determines the instruction. A channel created with
+`Channel.new<T>()` has type `Channel<T>` and always uses `CHAN_RECV`. A channel
+created with `Channel.newCloseable<T>()` has type `Closeable<Channel<T>>` and
+always uses `CHAN_RECV_MAYBE`. There is no scope tracking, no "known closeable"
+analysis — the type carries the information.
 
 **Migration:** No migration needed. Existing code using `CHAN_RECV` is unaffected.
 Code using `CHAN_CLOSE` (new feature) uses `CHAN_RECV_MAYBE` at the receive site.
@@ -314,8 +322,8 @@ CHAN_RECV_MAYBE  Rdst, Rchan
 - [ ] Add `CHAN_CLOSE` to `Instruction` enum
 - [ ] Add `CHAN_RECV_MAYBE` to `Instruction` enum
 - [ ] Lower `select { ... }` expression to `SELECT` instruction
-- [ ] Lowering rule: emit `CHAN_RECV_MAYBE` only when channel is known closeable
-      (i.e. `CHAN_CLOSE` called in current scope, or parameter typed `Closeable<Channel<T>>`)
+- [ ] Lowering rule: emit `CHAN_RECV_MAYBE` when channel expression has type `Closeable<Channel<T>>`;
+      emit `CHAN_RECV` when type is `Channel<T>` — type-driven, no scope analysis needed
 - [ ] `CHAN_RECV` semantics unchanged — continues to return `T`; RuntimeError on closed channel
 - [ ] Lower `select` with closed-channel detection to `CHAN_RECV_MAYBE` arms
 - [ ] Lowering test: `select` with timeout arm; verify `SELECT` instruction emitted

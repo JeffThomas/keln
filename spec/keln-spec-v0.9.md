@@ -448,14 +448,44 @@ Port.from { Pure String -> Result<Port, PortError> }
 ### 3.6 Generic Types
 
 ```keln
-type List<T>        -- ordered immutable sequence
-type Map<K, V>      -- immutable hash map
-type Set<T>         -- immutable unordered unique set
-type Channel<T>     -- typed concurrent channel (task-local ownership)
-type Maybe<T>       -- optional value (replaces null)
-type Result<T, E>   -- success or typed failure (replaces exceptions)
-type Task<T>        -- handle to a spawned concurrent computation
-type Ordering       -- LessThan | Equal | GreaterThan
+type List<T>                  -- ordered immutable sequence
+type Map<K, V>                -- immutable hash map
+type Set<T>                   -- immutable unordered unique set
+type Channel<T>               -- typed concurrent channel (task-local ownership)
+type Closeable<Channel<T>>    -- channel that may be explicitly closed; receive returns Maybe<T>
+type Maybe<T>                 -- optional value (replaces null)
+type Result<T, E>             -- success or typed failure (replaces exceptions)
+type Task<T>                  -- handle to a spawned concurrent computation
+type Ordering                 -- LessThan | Equal | GreaterThan
+type TypeRef<T>               -- phantom compile-time type descriptor; never constructed directly
+                              -- accessed as T.ref for any concrete type T
+                              -- erased after type checking; no runtime overhead
+```
+
+**`TypeRef<T>` — compile-time type descriptors:**
+
+Every concrete type `T` has a `.ref` class property of type `TypeRef<T>`, emitted
+by the compiler. It is never constructed by AI authors directly. It is used
+exclusively to pass type information to generic stdlib functions like `JSON.parse`.
+
+```keln
+-- Examples:
+JobMessage.ref         : TypeRef<JobMessage>
+Int.ref                : TypeRef<Int>
+List<String>.ref       : TypeRef<List<String>>
+Maybe<Port>.ref        : TypeRef<Maybe<Port>>
+```
+
+**`Closeable<Channel<T>>` — explicit channel lifecycle:**
+
+A channel created with `Channel.newCloseable<T>()` may be explicitly closed by
+its owner. Receiving from a closeable channel returns `Maybe<T>` and lowers to
+`CHAN_RECV_MAYBE`. There is no implicit conversion between `Channel<T>` and
+`Closeable<Channel<T>>` — closeability is fixed at creation.
+
+```keln
+Channel.new<T>()          : Channel<T>            -- standard; CHAN_RECV safe
+Channel.newCloseable<T>() : Closeable<Channel<T>> -- may be closed; use match on receive
 ```
 
 ### 3.7 State Machine Types
@@ -594,11 +624,43 @@ The record form `fn.with({ key: val, ... })` is equivalent to chaining multiple
 named `.with` calls. Both forms produce a fully typed `FunctionRef` with effects
 preserved. The record form is preferred when binding three or more parameters.
 
+**`.with` type rule — record subtraction:**
+
+Given `fn f { E InputRecord -> Out }` where `InputRecord = { f1: T1, ..., fN: TN }`:
+
+- `f.with(fi: v)` is valid iff `fi ∈ InputRecord` and `typeof(v) <: Ti`
+- Result type: `FunctionRef<E, InputRecord - {fi: Ti}, Out>`
+- Record subtraction removes exactly the bound field; field order is preserved
+
+Chaining reduces the type step by step:
+```keln
+f.with(field1: v1).with(field2: v2)
+-- result: FunctionRef<E, InputRecord - {field1, field2}, Out>
+```
+
+When all fields are bound the remaining input type is `Unit`:
+```keln
+fn greet { Pure { name: String } -> String }
+let g = greet.with(name: "Keln")
+-- g : FunctionRef<Pure, Unit, String>
+```
+
+**Compile errors:**
+```keln
+f.with(nonexistent: v)          -- field does not exist in input type
+h.with(port: "not-a-port")      -- type mismatch on bound value
+f.with(field1: v1).with(field1: v2)  -- field already bound
+scalar.with(x: 42)              -- .with() requires a record input type
+```
+
+`.with()` requires a record input type. Functions whose input is a scalar
+(`Int`, `String`, etc.) cannot use `.with()`.
+
 ### 4.5 Custom Effects
 
 ```keln
 effect Database {
-    query:       IO TypeRef                             -> Result<List<TypeRef>, DbError>
+    query:       IO TypeRef<T>                          -> Result<List<T>, DbError>       | for all T
     execute:     IO String                              -> Result<Unit, DbError>
     transaction: IO FunctionRef<IO, Unit, Result<T, E>> -> Result<T, E>
 }
@@ -632,7 +694,7 @@ trusted module Clock {
 ### 5.1 Uniform Declaration
 
 ```keln
-fn <n> {
+fn <n> [<TypeParams>] {
     <effects> <input_type> -> <output_type>
 
     in:         <binding>
@@ -650,6 +712,46 @@ fn <n> {
     }
 }
 ```
+
+**Type parameters on functions:**
+
+Type parameters are declared in square brackets immediately after the function
+name. They are optional — omit the brackets for non-generic functions.
+
+```keln
+-- Non-generic (no brackets needed):
+fn processJob { IO { job: Job, store: Store } -> Result<Unit, JobError> ... }
+
+-- Generic with type and effect parameters:
+fn keepIf [T, E] {
+    E { items: List<T>, predicate: FunctionRef<E, T, Bool> } -> List<T>
+    in:  { items, predicate }
+    out: List.filter(items, predicate)
+    confidence: auto
+}
+```
+
+Type parameters (`T`, `U`, `V`, ...) and effect parameters (`E`, ...) are
+declared in the same bracket list. Effect parameters are distinguished by
+appearing in effect position in `FunctionRef<E, In, Out>` or as the function's
+declared effect set. By convention, effect variables are single uppercase letters
+placed after type variables.
+
+Type parameters are in scope throughout the function's signature, body, `verify`
+block, `proves` block, and `helpers` block. Helper functions inherit their
+parent's type parameters automatically.
+
+**The `| effect E` constraint in stdlib signatures:**
+
+```keln
+List.map { List<T>, FunctionRef<E, T, U> -> List<U> | effect E }
+```
+
+`| effect E` declares that the function's effect set is exactly `E` — the
+effect of the passed `FunctionRef`. This is how effect subtyping flows through
+higher-order functions: passing a `Pure` ref makes `List.map` `Pure`; passing
+an `IO` ref makes it `IO`. User-defined generic functions may also use this
+form when their effect depends on a passed `FunctionRef`.
 
 ### 5.2 The `do` Block — Effect Sequencing
 
@@ -845,7 +947,7 @@ fn main {
 module Database {
     requires: { connection: Connection, timeout: Duration where milliseconds > 0 }
     provides: {
-        query:       IO TypeRef                             -> Result<List<TypeRef>, DbError>
+        query:       IO TypeRef<T>                          -> Result<List<T>, DbError>       | for all T
         execute:     IO String                              -> Result<Unit, DbError>
         transaction: IO FunctionRef<IO, Unit, Result<T, E>> -> Result<T, E>
     }
@@ -901,7 +1003,7 @@ not the Keln verifier — and its results appear in `VerificationResult.fuzz_sta
 ```keln
 trusted module JSON {
     provides: {
-        parse:     Pure Bytes, TypeRef -> Result<TypeRef, ParseError>
+        parse:     Pure Bytes, TypeRef<T> -> Result<T, ParseError>    | for all T
         serialize: Pure T              -> Bytes
     }
     reason: "correctness guaranteed by external test suite and fuzzing"
@@ -1050,6 +1152,30 @@ verify: {
 `not`, `and`, `or`, `implies` — scoped exclusively to `forall` and `proves`
 property expressions. Not available in `out` expressions or general code.
 
+**Samplable types — `forall` variables must be samplable:**
+
+A type is samplable if the `forall` sampling infrastructure can generate values
+of that type for bounded verification.
+
+```
+Samplable:
+    Int, Float, Bool, String, Bytes, Unit, Never (vacuously)
+    Record types where all fields are samplable
+    Sum types where all variants are samplable
+    List<T>, Map<K,V>, Set<T> where element types are samplable
+    Refinement types (sampled within constraint bounds)
+    FunctionRef<E, In, Out> where In and Out are samplable (mocked)
+
+Non-samplable (compile error in forall binding):
+    Channel<T>              -- live concurrent resource
+    Closeable<Channel<T>>  -- live concurrent resource
+    Task<T>                 -- live async handle
+    Module instances        -- stateful; no sampling semantics
+```
+
+`forall` variables must have samplable types. Using `Channel<T>`, `Task<T>`,
+or module instance types in a `forall` binding is a compile error.
+
 ```keln
 forall(a: Int where 1..5, b: Int where 1..5, p: RetryPolicy) ->
     implies(
@@ -1066,6 +1192,9 @@ forall(a: Int where 1..5, b: Int where 1..5, p: RetryPolicy) ->
 Deterministic stratified sampling: boundary → midpoint → stratified random →
 pure random. Per-dimension sampling for product types. Budget: 1000 iterations,
 5000ms timeout. Result types: `Passed { coverage: Bounded }`, `Failed`, `Timeout`.
+
+`forall` variables must have samplable types; using `Channel<T>`, `Task<T>`,
+or module instance types in a `forall` binding is a compile error.
 
 "Does not crash" form: omit `==` comparison to check expression evaluates
 successfully for all inputs.
@@ -1291,8 +1420,8 @@ Bytes.length     { Pure Bytes                -> Int            }
 
 Env.get          { IO   String               -> Maybe<String>  }
 Env.require      { IO   String               -> Result<String, EnvError> }
-JSON.parse       { Pure Bytes, TypeRef       -> Result<TypeRef, ParseError> }
-JSON.serialize   { Pure T                    -> Bytes          }
+JSON.parse       { Pure Bytes, TypeRef<T>    -> Result<T, ParseError>      | for all T }
+JSON.serialize   { Pure T                   -> Bytes                        | for all T }
 HttpServer.start { IO { port: Port, router: Router } -> Result<Unit, HttpError> }
 Response.json    { Pure Int, T               -> Response       }
 Response.err     { Pure Int, E               -> Response       }

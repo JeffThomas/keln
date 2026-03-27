@@ -56,6 +56,12 @@ pub enum Type {
 
     /// List<T> — sugar for Generic("List", [T]) but useful to have explicit
     List(Box<Type>),
+
+    /// TypeRef<T> — phantom compile-time type descriptor
+    TypeRef(Box<Type>),
+
+    /// Closeable<Channel<T>> — channel that may be explicitly closed
+    CloseableChannel(Box<Type>),
 }
 
 impl Type {
@@ -102,6 +108,8 @@ impl fmt::Display for Type {
             Type::Channel(t) => write!(f, "Channel<{}>", t),
             Type::Task(t) => write!(f, "Task<{}>", t),
             Type::List(t) => write!(f, "List<{}>", t),
+            Type::TypeRef(t) => write!(f, "TypeRef<{}>", t),
+            Type::CloseableChannel(t) => write!(f, "Closeable<Channel<{}>>" , t),
         }
     }
 }

@@ -164,6 +164,7 @@ pub enum ComparisonOp {
 #[derive(Debug, Clone)]
 pub struct FnDecl {
     pub name: String,
+    pub type_params: Vec<String>,   // e.g. ["T", "E"] from fn foo [T, E] { ... }
     pub signature: FnSignature,
     pub in_clause: Pattern,
     pub out_clause: Expr,
@@ -394,6 +395,15 @@ pub enum Expr {
         element_type: TypeExpr,
         span: Span,
     },
+
+    /// Channel.newCloseable<T>() — creates a closeable channel
+    ChannelNewCloseable {
+        element_type: TypeExpr,
+        span: Span,
+    },
+
+    /// T.ref — compile-time TypeRef<T> expression; produces Value::TypeRef at runtime
+    TypeRefExpr(TypeExpr, Span),
 
     // Clone
     Clone(Box<Expr>, Span),

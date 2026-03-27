@@ -164,6 +164,7 @@ fn sample_named(name: &str) -> Vec<Value> {
 
 fn sample_generic(name: &str, args: &[TypeExpr]) -> Vec<Value> {
     match name {
+        "Channel" | "Task" => vec![], // non-samplable; verified by type checker
         "List" => {
             let inner: Vec<Value> = args
                 .first()

@@ -59,6 +59,7 @@ impl Evaluator {
                     ast::HelperDecl::Compact { name, body, span, effects, input_type, output_type, .. } => {
                         let helper_decl = ast::FnDecl {
                             name: name.clone(),
+                            type_params: vec![],
                             signature: ast::FnSignature {
                                 effects: effects.clone(),
                                 input_type: input_type.clone(),
@@ -445,6 +446,21 @@ impl Evaluator {
 
             ast::Expr::ChannelNew { .. } => {
                 Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new()))))
+            }
+
+            ast::Expr::ChannelNewCloseable { .. } => {
+                Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new_closeable()))))
+            }
+
+            ast::Expr::TypeRefExpr(type_expr, _) => {
+                // Extract a human-readable name from the type expression
+                let name = match type_expr {
+                    ast::TypeExpr::Named(n, _) => n.clone(),
+                    ast::TypeExpr::Primitive(p, _) => format!("{:?}", p),
+                    ast::TypeExpr::Generic { name, .. } => name.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                Ok(Value::TypeRef(name))
             }
 
             ast::Expr::Clone(inner, _) => self.eval_expr(inner),
