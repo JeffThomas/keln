@@ -1,5 +1,5 @@
 use std::fmt;
-use crate::eval::{stdlib, RuntimeError, Value, VariantPayload};
+use crate::eval::{stdlib, ChannelInner, RuntimeError, Value, VariantPayload};
 use crate::vm::ir::{BuiltinTable, CallFrame, Constant, Frame, Instruction, KelnModule};
 
 // =============================================================================
@@ -409,9 +409,8 @@ fn exec_step(
         // ------------------------------------------------------------------
         Instruction::ChanNew { dst } => {
             use std::cell::RefCell;
-            use std::collections::VecDeque;
             use std::rc::Rc;
-            let ch = Rc::new(RefCell::new(VecDeque::new()));
+            let ch = Rc::new(RefCell::new(ChannelInner::new()));
             frame.write(*dst, Value::Channel(ch));
             *ip += 1;
         }
@@ -420,7 +419,13 @@ fn exec_step(
             let val = frame.take(*val_reg)?;
             let chan = frame.clone_reg(*chan_reg)?;
             match chan {
-                Value::Channel(rc) => rc.borrow_mut().push_back(val),
+                Value::Channel(rc) => {
+                    let mut inner = rc.borrow_mut();
+                    if inner.closed {
+                        return Err(ExecError::new("CHAN_SEND: channel is closed"));
+                    }
+                    inner.queue.push_back(val);
+                }
                 other => return Err(ExecError::new(format!("CHAN_SEND: expected channel, got {}", other))),
             }
             *ip += 1;
@@ -430,15 +435,12 @@ fn exec_step(
             let chan = frame.clone_reg(*chan_reg)?;
             let val = match &chan {
                 Value::Channel(rc) => {
-                    rc.borrow_mut().pop_front().map(|v| {
-                        Value::Variant {
-                            name: "Some".to_string(),
-                            payload: VariantPayload::Tuple(Box::new(v)),
-                        }
-                    }).unwrap_or(Value::Variant {
-                        name: "None".to_string(),
-                        payload: VariantPayload::Unit,
-                    })
+                    let mut inner = rc.borrow_mut();
+                    if inner.closed {
+                        return Err(ExecError::new("CHAN_RECV: channel is closed"));
+                    }
+                    inner.queue.pop_front()
+                        .ok_or_else(|| ExecError::new("CHAN_RECV: channel is empty"))?
                 }
                 other => return Err(ExecError::new(format!("CHAN_RECV: expected channel, got {}", other))),
             };
@@ -446,8 +448,35 @@ fn exec_step(
             *ip += 1;
         }
 
+        Instruction::ChanRecvMaybe { dst, chan_reg } => {
+            let chan = frame.clone_reg(*chan_reg)?;
+            let val = match &chan {
+                Value::Channel(rc) => {
+                    let mut inner = rc.borrow_mut();
+                    match inner.queue.pop_front() {
+                        Some(v) => Value::Variant {
+                            name: "Some".to_string(),
+                            payload: VariantPayload::Tuple(Box::new(v)),
+                        },
+                        None if inner.closed => Value::Variant {
+                            name: "None".to_string(),
+                            payload: VariantPayload::Unit,
+                        },
+                        None => return Err(ExecError::new("CHAN_RECV_MAYBE: channel is open and empty")),
+                    }
+                }
+                other => return Err(ExecError::new(format!("CHAN_RECV_MAYBE: expected channel, got {}", other))),
+            };
+            frame.write(*dst, val);
+            *ip += 1;
+        }
+
         Instruction::ChanClose { chan_reg } => {
-            let _ = frame.clone_reg(*chan_reg)?;
+            let chan = frame.clone_reg(*chan_reg)?;
+            match chan {
+                Value::Channel(rc) => rc.borrow_mut().closed = true,
+                other => return Err(ExecError::new(format!("CHAN_CLOSE: expected channel, got {}", other))),
+            }
             *ip += 1;
         }
 
@@ -459,7 +488,7 @@ fn exec_step(
             for arm in arms {
                 let chan = frame.clone_reg(arm.channel_reg)?;
                 if let Value::Channel(rc) = &chan
-                    && let Some(v) = rc.borrow_mut().pop_front()
+                    && let Some(v) = rc.borrow_mut().queue.pop_front()
                 {
                     if arm.binding_reg != 0 {
                         frame.write(arm.binding_reg, v);

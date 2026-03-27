@@ -264,6 +264,34 @@ The compiler verifies that a `Never`-returning function's `out` expression
 always either calls itself as a direct tail call or calls another `Never`-typed
 function. A `Never`-returning function cannot produce a value of any other type.
 
+**Scope of the `Never` guarantee:**
+
+The compiler's `Never` check is STRUCTURAL, not semantic:
+
+What the compiler DOES verify:
+- (a) Every syntactic exit from a `Never`-returning function is a direct
+      tail call to a `Never`-typed function or to another `Never`-typed callee.
+- (b) The function has no return expression of any non-`Never` type.
+- (c) All match arms in the `out` expression produce `Never`-typed values.
+
+What the compiler CANNOT verify:
+- (d) That the tail call is reachable under all inputs (halting problem).
+- (e) That the function does not terminate under some input distribution.
+- (f) That TCO is correctly applied by the bytecode lowerer for all call
+      shapes (this is a Phase 4 implementation correctness requirement,
+      not a type-level guarantee).
+
+A `Never`-returning function that terminates under some inputs is a
+specification error by the author. The type system prevents accidental
+return values but cannot prevent intentional or accidental infinite loops
+that happen to terminate. Runtime stack overflow or hang is the observable
+consequence of such an error.
+
+For safety-critical uses of `Never`, the author should include verify block
+cases that exercise the relevant code paths and confirm the function does not
+return (e.g., by testing that it processes N events without returning, using
+`Clock.sleep` mocks to bound execution time).
+
 **`Never` and `do` blocks:** A `do` block whose final expression has type
 `Never` also has type `Never`. This allows event loops expressed as `do` blocks
 with a tail call as the final expression.
@@ -932,6 +960,19 @@ type Confidence = {
 Auto-derivation: weighted average of verify coverage (0.5), pattern history
 (0.3), dependency score (0.2). Low-confidence dependencies surfaced in
 `low_risk_outliers` without collapsing the aggregate.
+
+```keln
+-- confidence: auto is the REQUIRED form for any function intended for
+-- registry submission. A function with a literal confidence declaration
+-- (confidence: 0.73) may be compiled and verified, but the registry
+-- admission gate (Gate 3) rejects submissions where program_confidence
+-- was not derived from VerificationResult.
+--
+-- Compilers SHOULD emit a CoverageSuggestion when a literal confidence
+-- value is declared on a public function, recommending conversion to auto.
+-- Compilers MUST record whether each function's confidence was auto-derived
+-- or self-declared in VerificationResult.confidence_sources.
+```
 
 ### 9.2 Provenance and PatternDB
 

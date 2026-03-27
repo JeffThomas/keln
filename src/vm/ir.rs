@@ -510,11 +510,15 @@ pub enum Instruction {
     // Channel operations
     // =========================================================================
     ChanNew   { dst: usize },
-    /// Rchan cloned; Rval MOVED.
+    /// Rchan cloned; Rval MOVED. RuntimeError if channel is closed.
     ChanSend  { chan_reg: usize, val_reg: usize },
-    /// Rchan cloned; sync: RuntimeError on open+empty; returns Maybe<T>.
+    /// Rchan cloned; returns T directly. RuntimeError on empty or closed channel.
     ChanRecv  { dst: usize, chan_reg: usize },
-    /// Mark channel closed; Rchan cloned.
+    /// Rchan cloned; returns Maybe<T>. Use only for closeable channels.
+    /// Closed+empty → Maybe::none(); closed+non-empty → Maybe::some(v).
+    /// Open+empty → RuntimeError (sync) / suspends (async).
+    ChanRecvMaybe { dst: usize, chan_reg: usize },
+    /// Mark channel closed; Rchan cloned. Subsequent CHAN_SEND → RuntimeError.
     ChanClose { chan_reg: usize },
 
     // =========================================================================

@@ -1,10 +1,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::ast;
-use super::{RuntimeError, Thunk, Value, VariantPayload};
+use super::{ChannelInner, RuntimeError, Thunk, Value, VariantPayload};
 use super::env::Env;
 use super::stdlib;
 
@@ -396,7 +395,7 @@ impl Evaluator {
                 for arm in arms {
                     let chan_val = self.eval_expr(&arm.channel)?;
                     if let Value::Channel(ch) = chan_val
-                        && let Some(item) = ch.borrow_mut().pop_front()
+                        && let Some(item) = ch.borrow_mut().queue.pop_front()
                     {
                         self.env.push_scope();
                         if arm.binding != "_" {
@@ -418,7 +417,11 @@ impl Evaluator {
                 let val = self.eval_expr(value)?;
                 match chan_val {
                     Value::Channel(ch) => {
-                        ch.borrow_mut().push_back(val);
+                        let mut inner = ch.borrow_mut();
+                        if inner.closed {
+                            return Err(RuntimeError::at("channel send on closed channel", span));
+                        }
+                        inner.queue.push_back(val);
                         Ok(Value::Unit)
                     }
                     _ => Err(RuntimeError::at("channel send on non-channel value", span)),
@@ -428,16 +431,20 @@ impl Evaluator {
             ast::Expr::ChannelRecv(channel, span) => {
                 let chan_val = self.eval_expr(channel)?;
                 match chan_val {
-                    Value::Channel(ch) => ch
-                        .borrow_mut()
-                        .pop_front()
-                        .ok_or_else(|| RuntimeError::at("channel recv: empty channel", span)),
+                    Value::Channel(ch) => {
+                        let mut inner = ch.borrow_mut();
+                        if inner.closed {
+                            return Err(RuntimeError::at("channel recv on closed channel", span));
+                        }
+                        inner.queue.pop_front()
+                            .ok_or_else(|| RuntimeError::at("channel recv: empty channel", span))
+                    }
                     _ => Err(RuntimeError::at("channel recv on non-channel value", span)),
                 }
             }
 
             ast::Expr::ChannelNew { .. } => {
-                Ok(Value::Channel(Rc::new(RefCell::new(VecDeque::new()))))
+                Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new()))))
             }
 
             ast::Expr::Clone(inner, _) => self.eval_expr(inner),
@@ -637,7 +644,7 @@ impl Evaluator {
                 let chan_val = self.eval_expr(channel)?;
                 let val = self.eval_expr(value)?;
                 if let Value::Channel(ch) = chan_val {
-                    ch.borrow_mut().push_back(val);
+                    ch.borrow_mut().queue.push_back(val);
                 }
                 Ok(())
             }

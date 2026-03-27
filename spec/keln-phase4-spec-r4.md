@@ -704,6 +704,17 @@ required on target host.
   - [ ] `VARIANT_PAYLOAD`: always emitted after `MATCH_TAG_EQ` in correct lowering
   - [ ] Tail call detection: `CALL` vs `TAIL_CALL` at all tail positions
   - [ ] `Never`-return validation: all exits must emit `TAIL_CALL`
+  - [ ] TCO lowering invariant: the lowering pass MUST emit `TAIL_CALL` (not `CALL`)
+        for every syntactic tail position in a `Never`-returning function.
+        This is a correctness requirement, not an optimization.
+        Verification: for every `KelnFn` with declared return type `Never`,
+        assert that no `CALL` instruction appears in a tail position —
+        i.e., no `CALL` whose result flows directly to `RETURN`.
+  - [ ] Lowering test: a `Never`-returning function with complex match arms
+        (all arms are tail calls); assert no `CALL` in tail position, only `TAIL_CALL`.
+  - [ ] Runtime test: `countdown(1_000_000)` as proxy; verify Rust call stack
+        depth remains 1 throughout — confirm this test covers `Never`-typed
+        functions specifically.
   - [ ] Match lowering: `MATCH_TAG_EQ` (tag_id, target_ip); `MATCH_LIT_EQ` (const_idx, target_ip)
   - [ ] `MATCH_LIT_EQ`: literal value from constant table; never embedded in instruction
   - [ ] Labels: two-pass resolution; `LABEL` erased; `JUMP`/`MATCH_*` use `target_ip: usize`
@@ -740,6 +751,48 @@ required on target host.
 - [ ] `kelnc compile` CLI (`--output`, `--async`, `--threads`, `--release`)
 - [ ] Embed module + VM runtime in ELF
 - [ ] Tests: compile + run `countdown`; compile + run worker integration test
+- [ ] Add `schema_table` to `.kbc` binary format (see Schema Versioning below)
+- [ ] Emit schema fingerprints for all referenced record types at compile time
+- [ ] VM load validation: compare schema fingerprints before execution
+- [ ] `LoadError::SchemaMismatch` with both fingerprints for diagnostics
+- [ ] `kelnc compile`: warn when field insertion (not append) would invalidate
+      existing compiled artifacts
+
+## Schema Versioning
+
+Every compiled `.kbc` artifact carries schema version fingerprints for all
+record types it references. The VM validates schema fingerprints before
+execution. A version mismatch is a hard error, not silent corruption.
+
+```
+Schema fingerprint: SHA-256(canonical field order of the record type)
+Computed at compile time from the RecordLayoutTable.
+
+Binary format addition:
+[schema_table]  u32 count + {type_name: String, fingerprint: [u8; 32]}* entries
+
+Runtime validation:
+    On load: for each entry in schema_table, compute the fingerprint of the
+    type as defined in the current source. If fingerprint differs from stored
+    value, reject the artifact with:
+        LoadError::SchemaMismatch {
+            type_name: String,
+            compiled_fingerprint: [u8; 32],
+            current_fingerprint:  [u8; 32]
+        }
+    This converts silent field misreads into explicit load failures.
+
+Implications for field evolution:
+    Adding a field anywhere in a record type changes its schema fingerprint.
+    All .kbc artifacts compiled against the old schema must be recompiled.
+    There is no automatic migration. This is intentional: silent field
+    misreads are worse than explicit recompilation requirements.
+
+    Recommended practice: append-only field addition (new fields at end of
+    canonical layout) minimizes recompilation surface. The spec does not
+    require this but tooling SHOULD warn when field insertion would change
+    existing positional indices.
+```
 
 ---
 

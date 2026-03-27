@@ -126,11 +126,28 @@ TimeoutArm:
     body_ip:      usize          -- instruction index of timeout body
 ```
 
-**Sync model behavior:**
+**Sync model behavior — VERIFICATION APPROXIMATION ONLY:**
 Poll each `channel_reg` in order. First non-empty channel wins: write received
 value to `binding_reg`, jump to `body_ip`. If no channel is ready and a
 `TimeoutArm` is present, jump to timeout `body_ip`. If no channel is ready and
 no timeout, return `Value::Unit` (existing behavior, consistent with tree-walker).
+
+This is NOT the behavioral specification of `select`.
+This is a testing approximation that makes verify blocks deterministic
+and reproducible.
+
+The behavioral specification of `select` is: one ready channel is chosen
+non-deterministically from the set of ready channels. The sync model
+approximates this by always choosing the first ready channel.
+
+Consequence: verify blocks may not cover all interleavings. Functions
+using `select` are always listed in `VerificationResult.concurrency_not_verified`.
+Full concurrency verification requires the async model (Phase 4c) with a
+deterministic scheduler replay (Phase 5).
+
+An AI authoring a `select` expression should NOT rely on channel priority
+ordering being preserved in production. Declaration order in `select` arms
+is documentation, not a behavioral contract.
 
 **Async model behavior (Phase 4c):**
 Emit a `tokio::select!` macro call polling all channels simultaneously. The
@@ -171,51 +188,63 @@ SELECT R_result,
 .select_end:
 ```
 
-### Resolution: CHAN_CLOSE and Maybe<T> Receive
+### Resolution: CHAN_CLOSE, CHAN_RECV_MAYBE, and CHAN_RECV (unchanged)
 
 ```
 CHAN_CLOSE   Rchan              -- mark channel as closed; Rchan cloned (handle remains valid)
                                -- subsequent CHAN_SEND on a closed channel → RuntimeError
-                               -- subsequent CHAN_RECV on a closed empty channel → Maybe::none()
-                               -- subsequent CHAN_RECV on a closed non-empty channel → Maybe::some(value)
+                               -- subsequent CHAN_RECV on a closed channel → RuntimeError
+                               -- subsequent CHAN_RECV_MAYBE on a closed empty channel → Maybe::none()
+                               -- subsequent CHAN_RECV_MAYBE on a closed non-empty channel → Maybe::some(value)
 ```
 
-**CHAN_RECV semantics update (closed channels):**
+**CHAN_RECV — restored to original semantics (no breaking change):**
 
-| Channel state | Sync model | Async model |
-|---|---|---|
-| Open, non-empty | `Ok(value)` — returns head | `Ok(value)` — returns head |
-| Open, empty | `RuntimeError` | suspends until value or close |
-| Closed, non-empty | `Maybe::some(value)` | `Maybe::some(value)` |
-| Closed, empty | `Maybe::none()` | `Maybe::none()` |
+```
+CHAN_RECV    Rdst, Rchan        -- returns T directly (not Maybe<T>)
+                               -- Rchan cloned
+                               -- sync: RuntimeError if channel empty
+                               -- async: suspends until value available
+                               -- RuntimeError if channel is closed
+```
 
-**Breaking change note:** This changes `CHAN_RECV`'s return type from `T` to
-`Maybe<T>` when the channel may be closed. Callers that know the channel is
-always open (the common case) continue to use `CHAN_RECV` and pattern-match
-away the `Maybe` wrapper. The type checker will enforce this: `Channel<T>`
-is the type for channels that may or may not be closed; a future
-`OpenChannel<T>` refinement could recover the direct-`T` receive if needed.
+**CHAN_RECV_MAYBE — new instruction for closeable channels:**
+
+```
+CHAN_RECV_MAYBE  Rdst, Rchan   -- returns Maybe<T>
+                               -- Rchan cloned
+                               -- Open, non-empty:   Maybe::some(value)
+                               -- Open, empty:       RuntimeError (sync) / suspends (async)
+                               -- Closed, non-empty: Maybe::some(value)
+                               -- Closed, empty:     Maybe::none()
+                               -- Used when: caller has called CHAN_CLOSE on this channel
+                               --            or receives a channel that may be closed
+```
+
+**Lowering rule:** The lowering pass emits `CHAN_RECV` when the channel's type
+is `Channel<T>` and the channel is not known to be closeable. It emits
+`CHAN_RECV_MAYBE` when the channel may be closed — which is only the case when:
+1. `CHAN_CLOSE` has been called on this channel in the current scope, OR
+2. The channel was received as a parameter typed `Closeable<Channel<T>>`
+
+**Migration:** No migration needed. Existing code using `CHAN_RECV` is unaffected.
+Code using `CHAN_CLOSE` (new feature) uses `CHAN_RECV_MAYBE` at the receive site.
+The two instructions coexist without conflict.
 
 **Practical note:** The stop-channel pattern (`<-ctx.stop_ch`) from the
 validation exercises remains idiomatic. `CHAN_CLOSE` is for cases where the
 sender wants to signal completion without sending a value — e.g., a producer
 that has finished all items.
 
-**Updated instruction table rows:**
-
-```
-CHAN_CLOSE   Rchan              -- Rchan cloned; marks channel closed
-CHAN_RECV    Rdst, Rchan        -- returns Maybe<T> (Some(v) or None on closed+empty)
-                               -- Rchan cloned; sync: RuntimeError on open+empty
-```
-
 **Updated Value Shape Guarantees rows:**
 
-| Instruction | Expected input | Error on mismatch |
-|---|---|---|
-| `CHAN_CLOSE` | Rchan is `Channel` | RuntimeError |
-| `CHAN_RECV` | Rchan is `Channel` | RuntimeError |
-| `SELECT` | all channel_reg are `Channel` | RuntimeError |
+| Instruction | Expected input | Return type | Error on mismatch |
+|---|---|---|---|
+| `CHAN_RECV` | Rchan is open `Channel<T>` | `T` | RuntimeError |
+| `CHAN_RECV_MAYBE` | Rchan is `Channel<T>` (any state) | `Maybe<T>` | RuntimeError |
+| `CHAN_CLOSE` | Rchan is `Channel<T>` | — | RuntimeError |
+| `CHAN_SEND` | Rchan is open `Channel<T>` | — | RuntimeError |
+| `SELECT` | all channel_reg are `Channel` | — | RuntimeError |
 
 ---
 
@@ -261,13 +290,18 @@ restarting the process. Phase 5+.
 Add these to the Phase 4 instruction set in Revision 4:
 
 ```
-SELECT  Rdst, [SelectArm...], Option<TimeoutArm>
-         -- see §Resolution: SELECT Instruction for full semantics
-CHAN_CLOSE  Rchan
-         -- mark channel closed; subsequent CHAN_RECV returns Maybe<T>
+SELECT          Rdst, [SelectArm...], Option<TimeoutArm>
+                 -- see §Resolution: SELECT Instruction for full semantics
+CHAN_CLOSE      Rchan
+                 -- mark channel closed; subsequent CHAN_RECV → RuntimeError;
+                 -- subsequent CHAN_RECV_MAYBE → Maybe::none() on empty
+CHAN_RECV_MAYBE  Rdst, Rchan
+                 -- returns Maybe<T>; used only for closeable channels
+                 -- see §Resolution: CHAN_CLOSE, CHAN_RECV_MAYBE for full semantics
 ```
 
-Update `CHAN_RECV` semantics to return `Maybe<T>` when channel may be closed.
+`CHAN_RECV` semantics are unchanged — it continues to return `T` directly.
+`CHAN_RECV_MAYBE` is the new instruction for closeable channel receive.
 
 ---
 
@@ -278,14 +312,19 @@ Update `CHAN_RECV` semantics to return `Maybe<T>` when channel may be closed.
 - [ ] Define `TimeoutArm { duration_reg, body_ip }` struct
 - [ ] Add `SELECT` to `Instruction` enum
 - [ ] Add `CHAN_CLOSE` to `Instruction` enum
-- [ ] Update `CHAN_RECV` to return `Maybe<T>` (closed channel semantics)
+- [ ] Add `CHAN_RECV_MAYBE` to `Instruction` enum
 - [ ] Lower `select { ... }` expression to `SELECT` instruction
+- [ ] Lowering rule: emit `CHAN_RECV_MAYBE` only when channel is known closeable
+      (i.e. `CHAN_CLOSE` called in current scope, or parameter typed `Closeable<Channel<T>>`)
+- [ ] `CHAN_RECV` semantics unchanged — continues to return `T`; RuntimeError on closed channel
+- [ ] Lower `select` with closed-channel detection to `CHAN_RECV_MAYBE` arms
 - [ ] Lowering test: `select` with timeout arm; verify `SELECT` instruction emitted
 
 ### Phase 4b additions
 - [ ] Implement `SELECT` in interpreter: sync poll loop; timeout arm as fallback
 - [ ] Implement `CHAN_CLOSE`: mark channel closed in `ChannelInner`
-- [ ] Update `CHAN_RECV`: return `Maybe::none()` on closed+empty, `Maybe::some(v)` on closed+non-empty
+- [ ] Implement `CHAN_RECV_MAYBE`: return `Maybe::none()` on closed+empty, `Maybe::some(v)` on closed+non-empty
+- [ ] `CHAN_RECV` on closed channel: RuntimeError (not Maybe)
 
 ### Phase 4c additions
 - [ ] Update `SELECT` async implementation to use `tokio::select!` with timeout via `tokio::time::sleep`

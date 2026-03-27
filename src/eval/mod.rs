@@ -13,6 +13,26 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::rc::Rc;
 
+// =============================================================================
+// ChannelInner — backing store for Value::Channel
+// =============================================================================
+
+#[derive(Debug, Clone)]
+pub struct ChannelInner {
+    pub queue:  VecDeque<Value>,
+    pub closed: bool,
+}
+
+impl ChannelInner {
+    pub fn new() -> Self {
+        ChannelInner { queue: VecDeque::new(), closed: false }
+    }
+}
+
+impl Default for ChannelInner {
+    fn default() -> Self { Self::new() }
+}
+
 pub use eval::Evaluator;
 
 // =============================================================================
@@ -37,7 +57,7 @@ pub enum Value {
     /// Partially applied function via .with
     PartialFn { name: String, bound: Vec<(String, Value)> },
     /// Synchronous channel (single-threaded; swap to Arc/Mutex for Tokio later)
-    Channel(Rc<RefCell<VecDeque<Value>>>),
+    Channel(Rc<RefCell<ChannelInner>>),
     /// Duration in milliseconds
     Duration(i64),
     /// Unix timestamp in milliseconds
