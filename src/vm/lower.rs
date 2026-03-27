@@ -62,6 +62,8 @@ struct FnCtx {
     labels:     HashMap<String, usize>,
     next_label: usize,
     debug_names: Vec<Option<String>>,
+    /// Names bound to Closeable<Channel<T>> values — used to select ChanRecvMaybe.
+    closeable_bindings: HashSet<String>,
 }
 
 impl FnCtx {
@@ -75,6 +77,7 @@ impl FnCtx {
             labels: HashMap::new(),
             next_label: 0,
             debug_names: vec![Some("input".to_string())],
+            closeable_bindings: HashSet::new(),
         }
     }
 
@@ -310,8 +313,29 @@ impl Lowerer {
     // Function declaration lowering
     // =========================================================================
 
+    /// Returns true if the type expression is Closeable<Channel<T>>.
+    fn is_closeable_type(te: &ast::TypeExpr) -> bool {
+        matches!(te, ast::TypeExpr::Generic { name, .. } if name == "Closeable")
+    }
+
+    /// Extract a single binding name from a simple pattern (Binding or Typed).
+    /// Returns None for destructuring patterns — closeable tracking is best-effort.
+    fn simple_binding_name(pattern: &Pattern) -> Option<&str> {
+        match pattern {
+            Pattern::Binding(name, _) => Some(name.as_str()),
+            Pattern::Typed { name, .. } => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
     fn lower_fn_decl(&mut self, fd: &ast::FnDecl) -> Result<KelnFn, LowerError> {
         let mut ctx = FnCtx::new(&fd.name);
+        // Seed closeable bindings from the declared input type.
+        if Self::is_closeable_type(&fd.signature.input_type) {
+            if let Some(name) = Self::simple_binding_name(&fd.in_clause) {
+                ctx.closeable_bindings.insert(name.to_string());
+            }
+        }
         // Bind in: pattern to R0
         self.lower_in_pattern(&mut ctx, &fd.in_clause, 0)?;
         // Lower out: expression in tail position
@@ -584,6 +608,12 @@ impl Lowerer {
             // -----------------------------------------------------------------
             Expr::Let(binding) => {
                 let val_reg = self.lower_expr(ctx, &binding.value, false)?;
+                // Track closeable channel bindings for type-driven recv lowering.
+                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. }) {
+                    if let Some(name) = Self::simple_binding_name(&binding.pattern) {
+                        ctx.closeable_bindings.insert(name.to_string());
+                    }
+                }
                 self.lower_in_pattern(ctx, &binding.pattern, val_reg)?;
                 Ok(val_reg)
             }
@@ -671,9 +701,19 @@ impl Lowerer {
                 Ok(dst)
             }
             Expr::ChannelRecv(chan_expr, _) => {
+                // Type-driven instruction selection: closeable channels use
+                // ChanRecvMaybe (returns Maybe<T>); plain channels use ChanRecv.
+                let is_closeable = matches!(
+                    chan_expr.as_ref(),
+                    Expr::Var(name, _) if ctx.closeable_bindings.contains(name.as_str())
+                );
                 let chan_reg = self.lower_expr(ctx, chan_expr, false)?;
                 let dst = ctx.alloc_reg();
-                ctx.emit(Instruction::ChanRecv { dst, chan_reg });
+                if is_closeable {
+                    ctx.emit(Instruction::ChanRecvMaybe { dst, chan_reg });
+                } else {
+                    ctx.emit(Instruction::ChanRecv { dst, chan_reg });
+                }
                 Ok(dst)
             }
 

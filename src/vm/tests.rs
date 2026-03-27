@@ -577,13 +577,10 @@ fn test_channel_close_lowers_to_chan_close_instruction() {
 
 #[test]
 fn test_channel_close_recv_after_close_returns_none() {
-    // Tree-walker only: the bytecode lowering pass does not yet route
-    // Closeable<Channel<T>> recv to ChanRecvMaybe (it emits ChanRecv unconditionally).
-    // This test verifies that receiving from a closed closeable channel returns None.
-    //
-    // We pre-close the channel in Rust rather than calling Channel.close inside the
-    // function body, because `Channel.close(ch)\n<-ch` in a do-block is parsed as
-    // `Channel.close(ch) <- ch` (a send) due to operator precedence.
+    // Both backends: a recv on a closed Closeable<Channel<T>> must return None.
+    // We pre-close the channel in Rust rather than calling Channel.close inside
+    // the function body, because `Channel.close(ch)\n<-ch` in a do-block is parsed
+    // as `Channel.close(ch) <- ch` (a send) due to operator precedence.
     use std::rc::Rc;
     use std::cell::RefCell;
     use crate::eval::{ChannelInner, VariantPayload};
@@ -595,10 +592,18 @@ fn test_channel_close_recv_after_close_returns_none() {
 }"#;
     let mut inner = ChannelInner::new_closeable();
     inner.closed = true;
-    let ch = Value::Channel(Rc::new(RefCell::new(inner)));
+    let ch = Value::Channel(Rc::new(RefCell::new(inner.clone())));
     let expected = Value::Variant { name: "None".to_string(), payload: VariantPayload::Unit };
-    let result = crate::eval::eval_fn(src, "recvFromClosed", ch).expect("tree-walker eval");
-    assert_eq!(result, expected);
+
+    // Tree-walker
+    let tw = crate::eval::eval_fn(src, "recvFromClosed", ch).expect("tree-walker eval");
+    assert_eq!(tw, expected, "tree-walker");
+
+    // Bytecode VM — ChanRecvMaybe is now emitted by the lowering pass for
+    // Closeable<Channel<T>> parameters, so this path is exercised correctly.
+    let ch2 = Value::Channel(Rc::new(RefCell::new(inner)));
+    let bc = run(src, "recvFromClosed", ch2);
+    assert_eq!(bc, expected, "bytecode VM");
 }
 
 // =============================================================================
