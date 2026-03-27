@@ -719,6 +719,27 @@ impl Checker {
                 Type::CloseableChannel(Box::new(elem_ty))
             }
 
+            ast::Expr::ChannelClose { channel, span } => {
+                if !self.current_effects.effects.contains("IO") {
+                    self.err("Channel.close requires IO effect", span);
+                }
+                let chan_ty = self.infer_expr(channel);
+                match &chan_ty {
+                    Type::CloseableChannel(_) => Type::Unit,
+                    Type::Channel(_) => {
+                        self.err(
+                            "Channel.close requires a Closeable<Channel<T>>; plain Channel<T> cannot be closed",
+                            span,
+                        );
+                        Type::Unit
+                    }
+                    _ => {
+                        self.err(format!("Channel.close: expected a closeable channel, got {}", chan_ty), span);
+                        Type::Unit
+                    }
+                }
+            }
+
             ast::Expr::TypeRefExpr(type_expr, _span) => {
                 let inner = self.resolve_type_expr(type_expr, &[]);
                 Type::TypeRef(Box::new(inner))
@@ -1189,7 +1210,7 @@ impl Checker {
             ast::Expr::Match { span, .. } | ast::Expr::Record { span, .. } |
             ast::Expr::DoBlock { span, .. } | ast::Expr::Select { span, .. } |
             ast::Expr::ChannelSend { span, .. } | ast::Expr::ChannelNew { span, .. } |
-            ast::Expr::ChannelNewCloseable { span, .. } |
+            ast::Expr::ChannelNewCloseable { span, .. } | ast::Expr::ChannelClose { span, .. } |
             ast::Expr::With { span, .. } | ast::Expr::BinaryOp { span, .. } |
             ast::Expr::FieldAccess { span, .. } => span.clone(),
             ast::Expr::List(_, s) => s.clone(),

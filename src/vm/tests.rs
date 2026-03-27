@@ -554,3 +554,134 @@ fn test_codec_release_strips_debug_names() {
     let result = execute_fn(&decoded, "double", Value::Int(7)).expect("execute");
     assert_eq!(result, Value::Int(14));
 }
+
+// =============================================================================
+// Fix 1 — Channel.close(ch)
+// =============================================================================
+
+#[test]
+fn test_channel_close_lowers_to_chan_close_instruction() {
+    // Verify that Channel.close(ch) in source emits a ChanClose instruction
+    // in the bytecode. Before this fix, Channel.close had no AST node or lowering
+    // path so it could never appear in compiled output.
+    let src = r#"fn closeIt {
+    IO Closeable<Channel<Int>> -> Unit
+    in: ch
+    out: Channel.close(ch)
+}"#;
+    let module = compile(src);
+    let is = instrs(&module, "closeIt");
+    let count = count_of(is, |i| matches!(i, Instruction::ChanClose { .. }));
+    assert_eq!(count, 1, "Channel.close should emit exactly one ChanClose instruction");
+}
+
+#[test]
+fn test_channel_close_recv_after_close_returns_none() {
+    // Tree-walker only: the bytecode lowering pass does not yet route
+    // Closeable<Channel<T>> recv to ChanRecvMaybe (it emits ChanRecv unconditionally).
+    // This test verifies that receiving from a closed closeable channel returns None.
+    //
+    // We pre-close the channel in Rust rather than calling Channel.close inside the
+    // function body, because `Channel.close(ch)\n<-ch` in a do-block is parsed as
+    // `Channel.close(ch) <- ch` (a send) due to operator precedence.
+    use std::rc::Rc;
+    use std::cell::RefCell;
+    use crate::eval::{ChannelInner, VariantPayload};
+
+    let src = r#"fn recvFromClosed {
+    IO Closeable<Channel<Int>> -> Maybe<Int>
+    in: ch
+    out: <-ch
+}"#;
+    let mut inner = ChannelInner::new_closeable();
+    inner.closed = true;
+    let ch = Value::Channel(Rc::new(RefCell::new(inner)));
+    let expected = Value::Variant { name: "None".to_string(), payload: VariantPayload::Unit };
+    let result = crate::eval::eval_fn(src, "recvFromClosed", ch).expect("tree-walker eval");
+    assert_eq!(result, expected);
+}
+
+// =============================================================================
+// Fix 2 — Schema versioning in codec
+// =============================================================================
+
+fn skip_section_bytes(data: &[u8], pos: &mut usize) {
+    let len = u32::from_le_bytes([data[*pos], data[*pos+1], data[*pos+2], data[*pos+3]]) as usize;
+    *pos += 4 + len;
+}
+
+#[test]
+fn test_codec_schema_roundtrip_with_record_types() {
+    // A program with a record-payload variant triggers layout table entries,
+    // which populate the schema_table section. Verify encode→decode succeeds
+    // (fingerprints match) so the happy path doesn't produce SchemaMismatch.
+    let src = r#"type JobErr = | Timeout { after: Int }
+fn makeErr { Pure Int -> JobErr  in: n  out: Timeout { after: n } }"#;
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    assert!(!module.layouts.layouts.is_empty(), "expected non-empty layout table");
+    let bytes = codec::encode(&module, 0, None).expect("encode");
+    let (decoded, _, _) = codec::decode(&bytes).expect("decode — schema mismatch on clean roundtrip");
+    // Sanity check: the decoded module still runs correctly
+    let result = execute_fn(&decoded, "makeErr", Value::Int(5)).expect("execute");
+    assert!(
+        matches!(&result, Value::Variant { name, .. } if name == "Timeout"),
+        "expected Timeout variant, got {:?}", result
+    );
+}
+
+#[test]
+fn test_codec_schema_mismatch_detected() {
+    // Corrupt the last byte of the schema_table section to simulate a compiled
+    // fingerprint that no longer matches the current layout. Decode must return
+    // LoadError::SchemaMismatch, not silently succeed.
+    use crate::vm::codec::LoadError;
+
+    let src = r#"type JobErr = | Timeout { after: Int }
+fn makeErr { Pure Int -> JobErr  in: n  out: Timeout { after: n } }"#;
+    let prog = parse(src).expect("parse");
+    let module = lower_program(&prog).expect("lower");
+    let mut bytes = codec::encode(&module, 0, None).expect("encode");
+
+    // Navigate to the schema_table section (comes after header, const, tags, layouts).
+    let mut pos = 8usize; // skip magic(4) + version(2) + flags(2)
+    skip_section_bytes(&bytes, &mut pos); // const_table
+    skip_section_bytes(&bytes, &mut pos); // tag_table
+    skip_section_bytes(&bytes, &mut pos); // layout_table
+
+    // pos is now at the schema_table length prefix.
+    let schema_len = u32::from_le_bytes([bytes[pos], bytes[pos+1], bytes[pos+2], bytes[pos+3]]) as usize;
+    assert!(schema_len > 0, "schema table must be non-empty for this test to be meaningful");
+
+    // Flip the last byte of the section data — this falls within the 32-byte
+    // fingerprint at the end of the final SchemaEntry without corrupting bincode framing.
+    let last_byte_idx = pos + 4 + schema_len - 1;
+    bytes[last_byte_idx] ^= 0xFF;
+
+    let result = codec::decode(&bytes);
+    assert!(
+        matches!(result, Err(LoadError::SchemaMismatch { .. })),
+        "expected SchemaMismatch from corrupted fingerprint, got: {:?}", result.err()
+    );
+}
+
+// =============================================================================
+// Fix 3 — Generic T.ref parsing
+// =============================================================================
+
+#[test]
+fn test_generic_type_ref_parses() {
+    // Before this fix, List<String>.ref failed to parse: the parser saw `<` after
+    // an upper ident and treated it as a comparison, producing a parse error.
+    // After the fix, the speculative parse path handles UpperIdent<TypeArgs>.ref.
+    //
+    // We use `Int -> Int` to keep the signature trivial; parse() doesn't type-check,
+    // so a TypeRef in an Int-typed position still gives us a clean parse-only test.
+    let src = r#"fn f {
+    Pure Int -> Int
+    in: n
+    out: List<String>.ref
+}"#;
+    let result = parse(src);
+    assert!(result.is_ok(), "List<String>.ref should parse without error: {:?}", result.err());
+}

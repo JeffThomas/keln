@@ -402,6 +402,12 @@ pub enum Expr {
         span: Span,
     },
 
+    /// Channel.close(ch) — closes a closeable channel
+    ChannelClose {
+        channel: Box<Expr>,
+        span: Span,
+    },
+
     /// T.ref — compile-time TypeRef<T> expression; produces Value::TypeRef at runtime
     TypeRefExpr(TypeExpr, Span),
 

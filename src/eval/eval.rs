@@ -434,11 +434,25 @@ impl Evaluator {
                 match chan_val {
                     Value::Channel(ch) => {
                         let mut inner = ch.borrow_mut();
-                        if inner.closed {
-                            return Err(RuntimeError::at("channel recv on closed channel", span));
+                        if inner.closeable {
+                            // Closeable<Channel<T>>: return Maybe<T>
+                            match inner.queue.pop_front() {
+                                Some(v) => Ok(Value::Variant {
+                                    name: "Some".to_string(),
+                                    payload: crate::eval::VariantPayload::Tuple(Box::new(v)),
+                                }),
+                                None => Ok(Value::Variant {
+                                    name: "None".to_string(),
+                                    payload: crate::eval::VariantPayload::Unit,
+                                }),
+                            }
+                        } else {
+                            if inner.closed {
+                                return Err(RuntimeError::at("channel recv on closed channel", span));
+                            }
+                            inner.queue.pop_front()
+                                .ok_or_else(|| RuntimeError::at("channel recv: empty channel", span))
                         }
-                        inner.queue.pop_front()
-                            .ok_or_else(|| RuntimeError::at("channel recv: empty channel", span))
                     }
                     _ => Err(RuntimeError::at("channel recv on non-channel value", span)),
                 }
@@ -450,6 +464,21 @@ impl Evaluator {
 
             ast::Expr::ChannelNewCloseable { .. } => {
                 Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new_closeable()))))
+            }
+
+            ast::Expr::ChannelClose { channel, span: _ } => {
+                let chan_val = self.eval_expr(channel)?;
+                match chan_val {
+                    Value::Channel(rc) => {
+                        let mut inner = rc.borrow_mut();
+                        if !inner.closeable {
+                            return Err(RuntimeError::new("Channel.close: channel was not created with Channel.newCloseable"));
+                        }
+                        inner.closed = true;
+                        Ok(Value::Unit)
+                    }
+                    _ => Err(RuntimeError::new("Channel.close: expected a channel value")),
+                }
             }
 
             ast::Expr::TypeRefExpr(type_expr, _) => {

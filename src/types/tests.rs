@@ -524,4 +524,28 @@ fn bad {
         let has_type_error = errors.iter().any(|e| e.message.contains("unknown type"));
         assert!(!has_type_error, "EnvError variants should resolve without unknown-type errors");
     }
+
+    // =========================================================================
+    // Fix 1 — Channel.close type checking
+    // =========================================================================
+
+    #[test]
+    fn test_channel_close_plain_channel_type_error() {
+        // Channel.close must require a Closeable<Channel<T>>. Passing a plain
+        // Channel<T> should produce a type error mentioning "Closeable".
+        assert_has_error(r#"fn closeIt {
+    IO Channel<Int> -> Unit
+    in: ch
+    out: Channel.close(ch)
+}"#, "Closeable");
+    }
+
+    #[test]
+    fn test_channel_close_closeable_channel_ok() {
+        assert_no_errors(r#"fn closeIt {
+    IO Closeable<Channel<Int>> -> Unit
+    in: ch
+    out: Channel.close(ch)
+}"#);
+    }
 }

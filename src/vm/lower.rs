@@ -643,6 +643,13 @@ impl Lowerer {
                 ctx.emit(Instruction::ChanNewCloseable { dst });
                 Ok(dst)
             }
+            Expr::ChannelClose { channel, .. } => {
+                let chan_reg = self.lower_expr(ctx, channel, false)?;
+                ctx.emit(Instruction::ChanClose { chan_reg });
+                let dst = ctx.alloc_reg();
+                ctx.emit(Instruction::LoadUnit { dst });
+                Ok(dst)
+            }
             Expr::TypeRefExpr(type_expr, _) => {
                 let name = match type_expr {
                     ast::TypeExpr::Named(n, _) => n.clone(),

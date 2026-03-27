@@ -1168,6 +1168,13 @@ impl Parser {
                         self.expect_symbol(")")?;
                         return Ok(Expr::ChannelNewCloseable { element_type, span });
                     }
+                    // Channel.close(expr) — close a closeable channel
+                    if parts.len() == 2 && parts[0] == "Channel" && parts[1] == "close" && self.check_symbol("(") {
+                        self.advance()?; // consume (
+                        let expr = self.parse_expr()?;
+                        self.expect_symbol(")")?;
+                        return Ok(Expr::ChannelClose { channel: Box::new(expr), span });
+                    }
                     // T.ref — TypeRef expression (e.g. MyType.ref, Int.ref)
                     if parts.last().map(|s| s.as_str()) == Some("ref") && parts.len() >= 2 {
                         // Reconstruct the type from all parts except the final "ref"
@@ -1184,6 +1191,17 @@ impl Parser {
                     }
                     return Ok(Expr::QualifiedName(parts, span));
                 }
+                // List<T>.ref — generic TypeRef expression
+                // Speculatively try to parse Name<args>.ref
+                if self.check_symbol("<") {
+                    let saved_pos = self.pos;
+                    // Try to parse type args and then .ref
+                    if let Some(type_expr) = self.try_parse_generic_type_ref(&name, &span) {
+                        return Ok(Expr::TypeRefExpr(type_expr, span));
+                    }
+                    // Rollback on failure
+                    self.pos = saved_pos;
+                }
                 if self.check_symbol("{") && !self.peek_brace_arrow() {
                     return self.parse_record_expr(Some(Box::new(Expr::UpperVar(name, span.clone()))));
                 }
@@ -1195,6 +1213,46 @@ impl Parser {
             }
             _ => Err(self.error_here("expected expression")),
         }
+    }
+
+    /// Speculatively try to parse `<type_args>.ref` after an upper-ident name.
+    /// Returns `Some(TypeExpr::Generic { ... })` on success, `None` on failure.
+    /// The caller must save/restore `self.pos` on `None`.
+    fn try_parse_generic_type_ref(&mut self, name: &str, span: &Span) -> Option<TypeExpr> {
+        // consume <
+        if !self.check_symbol("<") {
+            return None;
+        }
+        self.pos += 1;
+        // parse comma-separated type args
+        let mut args = vec![];
+        match self.parse_type_expr() {
+            Ok(t) => args.push(t),
+            Err(_) => return None,
+        }
+        while self.check_symbol(",") {
+            self.pos += 1;
+            match self.parse_type_expr() {
+                Ok(t) => args.push(t),
+                Err(_) => return None,
+            }
+        }
+        // expect >
+        if !self.check_symbol(">") {
+            return None;
+        }
+        self.pos += 1;
+        // expect .
+        if !self.check_symbol(".") {
+            return None;
+        }
+        self.pos += 1;
+        // expect ref
+        if !self.check_word("ref") {
+            return None;
+        }
+        self.pos += 1;
+        Some(TypeExpr::Generic { name: name.to_string(), args, span: span.clone() })
     }
 
     fn parse_binary_op(&mut self) -> Result<BinaryOp, ParseError> {

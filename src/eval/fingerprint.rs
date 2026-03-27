@@ -120,6 +120,7 @@ fn shape_expr(e: &Expr) -> String {
         Expr::ChannelRecv(_, _) => "ChRecv".to_string(),
         Expr::ChannelNew { .. } => "ChNew".to_string(),
         Expr::ChannelNewCloseable { .. } => "ChNewCloseable".to_string(),
+        Expr::ChannelClose { channel, .. } => format!("ChClose({})", shape_expr(channel)),
         Expr::TypeRefExpr(_, _) => "TypeRef".to_string(),
         Expr::Clone(inner, _) => format!("Clone({})", shape_expr(inner)),
         Expr::With { function, binding, .. } => {
