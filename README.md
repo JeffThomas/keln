@@ -8,7 +8,7 @@
 
 ## What Is Keln?
 
-Keln is a statically typed, functional, concurrent programming language being implemented in Rust. It is not designed for human authors. It is designed for AI systems that generate, compile, receive structured feedback, and iterate.
+Keln is a statically typed, functional, concurrent programming language implemented in Rust. It is not designed for human authors. It is designed for AI systems that generate, compile, receive structured feedback, and iterate.
 
 Every mainstream programming language was built around human cognitive constraints: memorable syntax, familiar metaphors, concise expressions, readable error messages. Keln starts from a different question — **what would a language look like if its author was an AI and its critic was a compiler?**
 
@@ -65,8 +65,8 @@ Functions carry a `confidence` field — a structured value with a point estimat
 A function's entire behavior surface — what it can do, not just what it returns — is visible in its type signature. No hidden I/O, no surprise mutations, no implicit logging.
 
 ```keln
-fn fetchUser  { IO              UserId -> Result<User, DbError>    }
-fn normalize  { Pure            User   -> User                     }
+fn fetchUser  { IO              UserId -> Result<User, DbError>         }
+fn normalize  { Pure            User   -> User                          }
 fn handleReq  { IO & Log & Clock Request -> Result<Response, HttpError> }
 ```
 
@@ -148,37 +148,62 @@ The language held at every step without requiring new features.
 
 ## Current Status
 
-**Phase 1 (Specification) — nearly complete.**
+**240 tests passing.**
 
-The language specification is at v0.9. The formal EBNF grammar is written. Three independent validation exercises are complete.
+### Phase 1 — Specification (complete)
 
-**Phase 2 (Tree-walking interpreter in Rust) — in progress.**
+The language specification is at v0.9. The formal EBNF grammar is written. Three independent validation exercises are complete. Multiple rounds of independent review have been incorporated, closing all known structural gaps.
 
-The implementation is in Rust, using [Lexxor](https://github.com/JeffThomas/lexx) for tokenization and a hand-written recursive descent parser. The tree-walker is the reference implementation. A bytecode VM follows in Phase 4.
+**Specification documents:**
 
-- [x] Lexer — custom matchers for identifiers, strings, comments on top of Lexxor (9 tests)
+| File | Contents |
+|---|---|
+| `keln-spec-v0.9.md` | Main language specification |
+| `keln-grammar-v0.9.ebnf` | Formal EBNF grammar |
+| `keln-effects-formal-v0.9.md` | Effect system formal semantics |
+| `keln-refinements-v0.9.md` | Refinement constraint spec |
+| `keln-forall-sampling-v0.9.md` | Property testing sampling algorithm |
+| `keln-phase4-spec-r4.md` | Bytecode VM specification (Phase 4) |
+| `keln-phase4-addendum.md` | SELECT, CHAN_CLOSE, CHAN_RECV_MAYBE addendum |
+| `keln-registry-spec-v0.1.md` | Capability registry specification |
+
+### Phase 2 — Tree-walking interpreter (complete)
+
+- [x] Lexer — custom matchers for identifiers, strings, comments (9 tests)
 - [x] Parser — recursive descent, full grammar coverage (15 tests)
 - [x] AST — all node types from the EBNF grammar
-- [x] Type checker — two-pass (register then check), expression inference, effect checking (23 tests)
-- [ ] Tree-walking evaluator with TCO (trampolining)
-- [ ] Verify executor: `given` + `forall` + FunctionRef mocking
-- [ ] `VerificationResult` emitter (JSON)
-- [ ] Channel and task primitives (Tokio)
-- [ ] Refinement constraint evaluator
+- [x] Type checker — two-pass (register then check), expression inference, effect checking, generic type params, `.with()` record subtraction, forall samplability enforcement (23 tests)
+- [x] Tree-walking evaluator with TCO (trampolining) (193 tests)
+- [x] Verify executor — `given` cases, `forall` property testing with stratified sampling, FunctionRef mocking, Clock mocking, fuzz harness for trusted modules
+- [x] `VerificationResult` emitter (JSON)
+- [x] Channel and task primitives (sync model; Tokio async model in Phase 4c)
+- [x] Refinement constraint evaluator
 
----
+### Phase 4 — Bytecode VM (complete through 4d)
 
-## Why Does This Exist?
+- [x] **Phase 4a** — IR definition: register-based single-assignment bytecode, full instruction set including SELECT, CHAN_CLOSE, CHAN_RECV_MAYBE, ChanNewCloseable, TypeRefExpr
+- [x] **Phase 4b** — Lowering pass: AST → bytecode IR, label resolution, TCO at IR level (TAIL_CALL instruction), full expression coverage
+- [x] **Phase 4c** — Interpreter: sync execution model, all instructions implemented, stack traces, proper channel semantics (closeable vs non-closeable enforcement)
+- [x] **Phase 4d** — `.kbc` binary format: encode/decode with bincode, magic header, version, const/tag/layout/fn tables; `kelnc compile` and `kelnc run-bc` CLI commands
 
-Most discussions of AI and programming focus on AI as a tool that helps humans write code. Keln explores the opposite: **what if the AI is the author and the language is designed entirely around that author's actual needs?**
+**What is implemented and enforced:**
+- `TypeRef<T>` phantom type with `T.ref` expression syntax
+- Generic function type parameters (`fn foo [T, E] { ... }`)
+- `.with()` record subtraction with full field validation and type checking
+- `Closeable<Channel<T>>` — type-driven `CHAN_RECV_MAYBE` lowering; `CHAN_CLOSE` enforces `closeable` flag at runtime
+- `forall` rejects `Channel<T>`, `Task<T>` bindings as a compile error
+- `Never`-returning functions validated structurally; TCO lowering invariant enforced
+- Schema versioning scaffolded in `.kbc` format spec
 
-The result is a language that is:
-- Deliberately verbose in ways that eliminate generation ambiguity
-- Structured so that every declaration looks identical, removing the "which form does this use?" question
-- Built so that the compiler's output is data the AI can act on, not text it has to parse
-- Equipped with a learning loop (PatternDB) that feeds historical failure rates back into confidence scoring
+### Phase 5 — Planned
 
-Whether Keln produces higher-quality, more maintainable production systems than well-prompted AI + conventional languages is an open empirical question. That's what making it real is for.
+- MCP server exposing `compile`, `verify`, `run-bc`, `registry_submit` as typed tools
+- Deterministic scheduler replay for full concurrency verification
+- Gas metering (`GAS` instruction with budget)
+- VM state serialization (checkpointing)
+- Hot code reloading
+- PatternDB integration
+- Registry capability store
 
 ---
 
@@ -187,26 +212,52 @@ Whether Keln produces higher-quality, more maintainable production systems than 
 ```
 keln/
 ├── spec/
-│   ├── keln-spec-v0.9.md            # Language specification
-│   └── keln-grammar-v0.9.ebnf       # Formal EBNF grammar
+│   ├── keln-spec-v0.9.md              # Language specification
+│   ├── keln-grammar-v0.9.ebnf         # Formal EBNF grammar
+│   ├── keln-effects-formal-v0.9.md    # Effect system formal semantics
+│   ├── keln-refinements-v0.9.md       # Refinement constraint spec
+│   ├── keln-forall-sampling-v0.9.md   # forall sampling algorithm
+│   ├── keln-phase4-spec-r4.md         # Bytecode VM specification
+│   ├── keln-phase4-addendum.md        # SELECT / CHAN_CLOSE addendum
+│   ├── keln-registry-spec-v0.1.md     # Capability registry specification
+│   ├── keln-language-gaps-addendum.md # Type system gap closures (TypeRef, generics, etc.)
+│   └── keln-critique-response-addendum.md # Spec corrections from review
 ├── src/
-│   ├── main.rs                      # CLI entry point
-│   ├── lib.rs                       # Crate root (pub mod declarations)
-│   ├── ast.rs                       # AST node types (all grammar constructs)
+│   ├── main.rs                        # CLI: kelnc compile / run-bc / verify
+│   ├── lib.rs                         # Crate root
+│   ├── ast.rs                         # AST node types (all grammar constructs)
 │   ├── lexer/
-│   │   ├── mod.rs                   # Lexer core: create_lexer(), tokenize()
-│   │   ├── tokens.rs                # Token type constants (TT_*)
-│   │   ├── identifier_matcher.rs    # Custom matcher: letters + digits + underscores
-│   │   ├── string_matcher.rs        # Custom matcher: "..." string literals
-│   │   └── comment_matcher.rs       # Custom matcher: -- single-line comments
+│   │   ├── mod.rs                     # Lexer: create_lexer(), tokenize()
+│   │   ├── tokens.rs                  # Token type constants (TT_*)
+│   │   ├── identifier_matcher.rs      # Custom matcher: identifiers
+│   │   ├── string_matcher.rs          # Custom matcher: "..." string literals
+│   │   └── comment_matcher.rs         # Custom matcher: -- comments
 │   ├── parser/
-│   │   ├── mod.rs                   # Recursive descent parser
-│   │   └── error.rs                 # ParseError type
-│   └── types/
-│       ├── mod.rs                   # Type/EffectSet/TypeError + public API
-│       ├── env.rs                   # TypeEnv: scoped bindings, registries, builtins
-│       ├── check.rs                 # Checker: inference, pattern binding, effects
-│       └── tests.rs                 # Type checker tests
+│   │   ├── mod.rs                     # Recursive descent parser
+│   │   └── error.rs                   # ParseError type
+│   ├── types/
+│   │   ├── mod.rs                     # Type / EffectSet / TypeError + public API
+│   │   ├── env.rs                     # TypeEnv: scoped bindings, registries, builtins
+│   │   ├── check.rs                   # Checker: inference, effects, generics, .with()
+│   │   └── tests.rs                   # Type checker tests
+│   ├── eval/
+│   │   ├── mod.rs                     # Value / ChannelInner / RuntimeError
+│   │   ├── eval.rs                    # Tree-walking evaluator (Evaluator)
+│   │   ├── interpreter.rs             # Alternative evaluator path
+│   │   ├── env.rs                     # Evaluation environment
+│   │   ├── stdlib.rs                  # Built-in functions and combinators
+│   │   └── fingerprint.rs             # Structural fingerprinting for PatternDB
+│   ├── verify/
+│   │   ├── mod.rs                     # VerifyExecutor: given / forall / fuzz
+│   │   ├── result.rs                  # FnVerifyResult / VerificationResult types
+│   │   └── sample.rs                  # Stratified sampler for forall properties
+│   └── vm/
+│       ├── mod.rs                     # VM module root
+│       ├── ir.rs                      # Bytecode instruction set + KelnModule
+│       ├── lower.rs                   # AST → bytecode lowering pass
+│       ├── exec.rs                    # Bytecode interpreter (sync model)
+│       ├── codec.rs                   # .kbc binary encode/decode
+│       └── tests.rs                   # VM lowering and execution tests
 └── Cargo.toml
 ```
 
@@ -216,7 +267,8 @@ keln/
 
 - **[Lexxor](https://crates.io/crates/lexxor)** — fast, extensible, greedy single-pass tokenizer (our own)
 - **[Tokio](https://tokio.rs)** — async runtime for channels, tasks, and the work-stealing scheduler
-- **[Serde JSON](https://crates.io/crates/serde_json)** — structured `VerificationResult` output
+- **[Serde](https://crates.io/crates/serde) / [Serde JSON](https://crates.io/crates/serde_json)** — structured `VerificationResult` output
+- **[Bincode](https://crates.io/crates/bincode)** — compact binary encoding for `.kbc` bytecode files
 
 ---
 
@@ -239,6 +291,20 @@ keln/
 - Compatible with existing ecosystems
 - A compilation target for other languages
 - A research artifact — it will be implemented and deployed
+
+---
+
+## Why Does This Exist?
+
+Most discussions of AI and programming focus on AI as a tool that helps humans write code. Keln explores the opposite: **what if the AI is the author and the language is designed entirely around that author's actual needs?**
+
+The result is a language that is:
+- Deliberately verbose in ways that eliminate generation ambiguity
+- Structured so that every declaration looks identical, removing the "which form does this use?" question
+- Built so that the compiler's output is data the AI can act on, not text it has to parse
+- Equipped with a learning loop (PatternDB) that feeds historical failure rates back into confidence scoring
+
+Whether Keln produces higher-quality, more maintainable production systems than well-prompted AI + conventional languages is an open empirical question. That's what making it real is for.
 
 ---
 
