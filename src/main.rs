@@ -17,6 +17,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start the Keln MCP server over stdio
+    Mcp,
     /// Evaluate a function in a .keln file and print the result
     Run {
         /// Path to the .keln source file
@@ -73,10 +75,17 @@ enum Command {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Mcp => {
+            if let Err(e) = keln::mcp::run_mcp_server().await {
+                eprintln!("mcp server error: {}", e);
+                std::process::exit(1);
+            }
+        }
         Command::Run { file, func, arg } => cmd_run(&file, &func, arg.as_deref()),
         Command::Check { file } => cmd_check(&file),
         Command::Verify { file } => cmd_verify(&file),
