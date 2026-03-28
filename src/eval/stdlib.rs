@@ -166,6 +166,8 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Response.err"
             | "GraphQL.execute"
             | "GraphQL.query"
+            | "File.read"
+            | "File.readLines"
     )
 }
 
@@ -1543,6 +1545,35 @@ pub fn dispatch(
                 ("data".to_string(), Value::Unit),
                 ("errors".to_string(), Value::List(vec![])),
             ])))
+        }
+
+        // =====================================================================
+        // File I/O
+        // =====================================================================
+        "File.read" => {
+            let v = one(args, "File.read")?;
+            match v {
+                Value::Str(path) => match std::fs::read_to_string(&path) {
+                    Ok(contents) => Ok(Value::Str(contents)),
+                    Err(e) => Err(RuntimeError::new(format!("File.read: {}", e))),
+                },
+                _ => Err(RuntimeError::new("File.read: expected String path")),
+            }
+        }
+        "File.readLines" => {
+            let v = one(args, "File.readLines")?;
+            match v {
+                Value::Str(path) => match std::fs::read_to_string(&path) {
+                    Ok(contents) => Ok(Value::List(
+                        contents
+                            .lines()
+                            .map(|l| Value::Str(l.to_string()))
+                            .collect(),
+                    )),
+                    Err(e) => Err(RuntimeError::new(format!("File.readLines: {}", e))),
+                },
+                _ => Err(RuntimeError::new("File.readLines: expected String path")),
+            }
         }
 
         _ => Err(RuntimeError::new(format!("unknown stdlib function '{}'", name))),

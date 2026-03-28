@@ -542,6 +542,15 @@ impl Evaluator {
                 Ok(Value::Unit)
             }
 
+            ast::Expr::LetIn { binding, body, .. } => {
+                let v = self.eval_expr(&binding.value)?;
+                self.env.push_scope();
+                self.bind_pattern_to_env(&binding.pattern, v);
+                let result = self.eval_expr(body)?;
+                self.env.pop_scope();
+                Ok(result)
+            }
+
             ast::Expr::BinaryOp { left, op, right, span } => {
                 let lv = self.eval_expr(left)?;
                 let rv = self.eval_expr(right)?;

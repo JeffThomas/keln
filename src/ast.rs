@@ -421,8 +421,15 @@ pub enum Expr {
         span: Span,
     },
 
-    // Let-in (inside do blocks and match arms)
+    // Let statement (inside do blocks)
     Let(LetBinding),
+
+    // Let-in expression: `let x = e in body`
+    LetIn {
+        binding: LetBinding,
+        body: Box<Expr>,
+        span: Span,
+    },
 
     // Arithmetic
     BinaryOp {

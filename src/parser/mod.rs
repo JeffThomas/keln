@@ -1404,7 +1404,15 @@ impl Parser {
     }
 
     fn parse_let_expr(&mut self) -> Result<Expr, ParseError> {
-        Ok(Expr::Let(self.parse_let_binding()?))
+        let binding = self.parse_let_binding()?;
+        if self.check_keyword("in") {
+            let span = binding.span.clone();
+            self.advance()?;
+            let body = self.parse_expr()?;
+            Ok(Expr::LetIn { binding, body: Box::new(body), span })
+        } else {
+            Ok(Expr::Let(binding))
+        }
     }
 
     fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {

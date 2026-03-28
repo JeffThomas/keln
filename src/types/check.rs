@@ -819,6 +819,14 @@ impl Checker {
                 Type::Unit // let bindings in expression context are Unit
             }
 
+            ast::Expr::LetIn { binding, body, .. } => {
+                self.env.push_scope();
+                self.check_let_binding(binding);
+                let body_ty = self.infer_expr(body);
+                self.env.pop_scope();
+                body_ty
+            }
+
             ast::Expr::BinaryOp { left, op, right, span } => {
                 let lt = self.infer_expr(left);
                 let rt = self.infer_expr(right);
@@ -1215,6 +1223,7 @@ impl Checker {
             ast::Expr::FieldAccess { span, .. } => span.clone(),
             ast::Expr::List(_, s) => s.clone(),
             ast::Expr::Let(lb) => lb.span.clone(),
+            ast::Expr::LetIn { span, .. } => span.clone(),
             ast::Expr::TypeRefExpr(_, s) => s.clone(),
         }
     }

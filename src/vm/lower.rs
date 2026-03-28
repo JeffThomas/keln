@@ -460,9 +460,9 @@ impl Lowerer {
                     // Return the bound register directly — sources are cloned by
                     // the consuming instruction (Add, Call, etc.) per the spec.
                     Ok(reg)
-                } else if self.user_fns.contains(name.as_str()) {
+                } else if let Some(qualified) = self.resolve_scoped_fn(ctx, name) {
                     let dst = ctx.alloc_reg();
-                    ctx.emit(Instruction::LoadFnRef { dst, name: name.clone() });
+                    ctx.emit(Instruction::LoadFnRef { dst, name: qualified });
                     Ok(dst)
                 } else {
                     Err(LowerError::new(format!(
@@ -616,6 +616,20 @@ impl Lowerer {
                 }
                 self.lower_in_pattern(ctx, &binding.pattern, val_reg)?;
                 Ok(val_reg)
+            }
+
+            Expr::LetIn { binding, body, .. } => {
+                let val_reg = self.lower_expr(ctx, &binding.value, false)?;
+                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. }) {
+                    if let Some(name) = Self::simple_binding_name(&binding.pattern) {
+                        ctx.closeable_bindings.insert(name.to_string());
+                    }
+                }
+                ctx.push_scope();
+                self.lower_in_pattern(ctx, &binding.pattern, val_reg)?;
+                let result_reg = self.lower_expr(ctx, body, false)?;
+                ctx.pop_scope();
+                Ok(result_reg)
             }
 
             // -----------------------------------------------------------------
@@ -799,9 +813,8 @@ impl Lowerer {
                     let dst = ctx.alloc_reg();
                     ctx.emit(Instruction::CallBuiltin { dst, builtin, args: vec![arg_reg] });
                     Ok(dst)
-                } else if self.user_fns.contains(name.as_str()) {
-                    // Two-pass guarantees fn_idx is already registered.
-                    let fn_idx = self.module.fn_idx(name).unwrap_or(0);
+                } else if let Some(qualified) = self.resolve_scoped_fn(ctx, name) {
+                    let fn_idx = self.module.fn_idx(&qualified).unwrap_or(0);
                     if tail {
                         ctx.emit(Instruction::TailCall { fn_idx, arg_reg });
                         Ok(NO_REG)
@@ -854,6 +867,33 @@ impl Lowerer {
 
     fn resolve_fn_idx(&self, name: &str) -> usize {
         self.module.fn_idx(name).unwrap_or(0)
+    }
+
+    /// Resolve a bare function name to a fully-qualified name that exists in
+    /// `user_fns`, searching: bare name → child helper → sibling helper.
+    ///
+    /// - Child:   `ctx.name::bare`   — a helper defined on the current function
+    /// - Sibling: `parent::bare`     — a helper defined alongside the current function
+    ///
+    /// Returns `None` if no match is found.
+    fn resolve_scoped_fn<'a>(&self, ctx: &FnCtx, bare: &'a str) -> Option<String> {
+        if self.user_fns.contains(bare) {
+            return Some(bare.to_string());
+        }
+        // Child helper: solve::currentFn::bare
+        let as_child = format!("{}::{}", ctx.name, bare);
+        if self.user_fns.contains(as_child.as_str()) {
+            return Some(as_child);
+        }
+        // Sibling helper: solve::bare  (strip last segment from ctx.name)
+        if let Some(sep) = ctx.name.rfind("::") {
+            let parent = &ctx.name[..sep];
+            let as_sibling = format!("{}::{}", parent, bare);
+            if self.user_fns.contains(as_sibling.as_str()) {
+                return Some(as_sibling);
+            }
+        }
+        None
     }
 
     /// Lower a list of Arg to a list of registers.

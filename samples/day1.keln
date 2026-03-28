@@ -1,0 +1,16 @@
+fn solve {    Pure String -> Int    in: input    out: List.fold(
+                  String.split(String.trim(input), \"\\"),           { pos: 50, count: 0 },
+                  processLine         ).count    helpers: {        processLine :: Pure { acc: { pos: Int, count:
+                   Int }, item: String } -> { pos: Int, count: Int } =>            do {                let trimmed =
+                   String.trim(it.item)                let isEmpty = String.isEmpty(trimmed)                match
+                  isEmpty {                    true -> it.acc                    false -> do {
+                      let dir = String.slice(trimmed, 0, 1)                        let numStr = String.slice(trimmed,
+                  1, String.len(trimmed))                        let parsed = Int.parse(numStr)
+                     match parsed {                            Ok(dist) -> do {                                let
+                  newPos = match dir == \"R\" {                                    true -> (it.acc.pos + dist) % 100
+                                                      false -> (it.acc.pos - dist + 10000) % 100
+                            }                                let hitZero = match newPos == 0 {
+                                true -> 1                                    false -> 0
+                     }                                { pos: newPos, count: it.acc.count + hitZero }
+                              }                            _ -> it.acc                        }
+                   }                }            }    }}

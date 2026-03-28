@@ -1,0 +1,35 @@
+-- AoC Day 1: Secret Entrance
+-- Dial 0-99, start at 50. R adds, L subtracts (mod 100).
+-- Count how many times position == 0.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: List.fold(
+        File.readLines(path),
+        { pos: 50, count: 0 },
+        processLine
+    ).count
+
+    helpers: {
+        processLine :: Pure { acc: { pos: Int, count: Int }, item: String } -> { pos: Int, count: Int } =>
+            let dir    = String.slice(it.item, 0, 1) in
+            let dist   = Result.unwrap(Int.parse(String.slice(it.item, 1, String.len(it.item)))) in
+            let newPos = calcPos({ pos: it.acc.pos, dir: dir, dist: dist }) in
+            match newPos == 0 {
+                true  -> { pos: newPos, count: it.acc.count + 1 }
+                false -> { pos: newPos, count: it.acc.count }
+            }
+
+        calcPos :: Pure { pos: Int, dir: String, dist: Int } -> Int =>
+            match it.dir == "R" {
+                true  -> (it.pos + it.dist) % 100
+                false -> (it.pos - it.dist + 100000) % 100
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_1/input.txt") -> 1120
+    }
+}

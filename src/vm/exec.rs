@@ -153,7 +153,9 @@ fn exec_step(
         }
 
         // ------------------------------------------------------------------
-        // Builtin call — delegate to stdlib::dispatch via name lookup
+        // Builtin call — delegate to stdlib::dispatch via name lookup.
+        // Higher-order list operations that receive a user FnRef are handled
+        // directly so they can dispatch back into the bytecode VM.
         // ------------------------------------------------------------------
         Instruction::CallBuiltin { dst, builtin, args } => {
             let builtin_name = BuiltinTable::name_of(*builtin);
@@ -161,7 +163,7 @@ fn exec_step(
                 .iter()
                 .map(|r| frame.clone_reg(*r))
                 .collect::<Result<Vec<_>, _>>()?;
-            let result = dispatch_builtin(builtin_name, vals)?;
+            let result = exec_builtin_with_module(module, builtin_name, vals)?;
             frame.write(*dst, result);
             *ip += 1;
         }
@@ -565,6 +567,94 @@ fn exec_step(
         }
     }
     Ok(None)
+}
+
+// =============================================================================
+// =============================================================================
+// Higher-order builtin dispatch with module context
+// =============================================================================
+
+/// Route builtin calls through the module so user FnRefs in higher-order
+/// list operations (fold, map, filter) can call back into the bytecode VM.
+fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -> Result<Value, ExecError> {
+    match name {
+        "List.fold" | "List.foldl" => {
+            // fold(list, init, fn)  — fn: { acc, item } -> acc
+            if let [ref list, ref init, ref fn_val] = args[..] {
+                if let Value::FnRef(fn_name) = fn_val {
+                    if module.fn_idx(fn_name).is_some() {
+                        return exec_fold_user(module, list.clone(), init.clone(), fn_name);
+                    }
+                }
+            }
+            dispatch_builtin(name, args)
+        }
+        "List.map" => {
+            // map(list, fn)  — fn: item -> mapped
+            if let [ref list, ref fn_val] = args[..] {
+                if let Value::FnRef(fn_name) = fn_val {
+                    if module.fn_idx(fn_name).is_some() {
+                        return exec_map_user(module, list.clone(), fn_name);
+                    }
+                }
+            }
+            dispatch_builtin(name, args)
+        }
+        "List.filter" => {
+            // filter(list, fn)  — fn: item -> Bool
+            if let [ref list, ref fn_val] = args[..] {
+                if let Value::FnRef(fn_name) = fn_val {
+                    if module.fn_idx(fn_name).is_some() {
+                        return exec_filter_user(module, list.clone(), fn_name);
+                    }
+                }
+            }
+            dispatch_builtin(name, args)
+        }
+        _ => dispatch_builtin(name, args),
+    }
+}
+
+fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.fold: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("item".to_string(), item),
+        ]);
+        acc = execute_fn(module, fn_name, arg)?;
+    }
+    Ok(acc)
+}
+
+fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.map: expected List")),
+    };
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        result.push(execute_fn(module, fn_name, item)?);
+    }
+    Ok(Value::List(result))
+}
+
+fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.filter: expected List")),
+    };
+    let mut result = Vec::new();
+    for item in items {
+        if execute_fn(module, fn_name, item.clone())? == Value::Bool(true) {
+            result.push(item);
+        }
+    }
+    Ok(Value::List(result))
 }
 
 // =============================================================================

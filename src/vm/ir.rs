@@ -329,6 +329,8 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "JSON.parse", "JSON.serialize",
     // Maybe.unwrapOr already at 18; Result.unwrap (164)
     "Result.unwrap",
+    // File I/O (165–166)
+    "File.read", "File.readLines",
 ];
 
 pub struct BuiltinTable {

@@ -99,6 +99,7 @@ fn shape_expr(e: &Expr) -> String {
             format!("Do([{}],{})", stmt_shapes.join(";"), shape_expr(final_expr))
         }
         Expr::Let(lb) => format!("Let({})", shape_expr(&lb.value)),
+        Expr::LetIn { binding, body, .. } => format!("LetIn({},{})", shape_expr(&binding.value), shape_expr(body)),
         Expr::Record { name, fields, .. } => {
             let ns = name.as_ref().map(|n| shape_expr(n)).unwrap_or_default();
             let fs: Vec<_> = fields.iter().map(|f| format!("{}:{}", f.name, shape_expr(&f.value))).collect();
@@ -260,6 +261,7 @@ fn collect_calls(e: &Expr, out: &mut Vec<String>) {
             collect_calls(final_expr, out);
         }
         Expr::Let(lb) => collect_calls(&lb.value, out),
+        Expr::LetIn { binding, body, .. } => { collect_calls(&binding.value, out); collect_calls(body, out); }
         Expr::Record { fields, .. } => {
             for f in fields { collect_calls(&f.value, out); }
         }

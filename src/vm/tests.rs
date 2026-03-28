@@ -671,6 +671,116 @@ fn makeErr { Pure Int -> JobErr  in: n  out: Timeout { after: n } }"#;
 }
 
 // =============================================================================
+// let … in expressions
+// =============================================================================
+
+#[test]
+fn test_let_in_basic() {
+    assert_both_backends(
+        r#"fn f { Pure Int -> Int  in: n  out: let x = n + 1 in x * 2 }"#,
+        "f", Value::Int(3), Value::Int(8),
+    );
+}
+
+#[test]
+fn test_let_in_nested() {
+    assert_both_backends(
+        r#"fn f { Pure Int -> Int  in: n  out: let x = n + 1 in let y = x * 2 in x + y }"#,
+        "f", Value::Int(4), Value::Int(15), // x=5, y=10, x+y=15
+    );
+}
+
+#[test]
+fn test_let_in_scoped_name_does_not_leak() {
+    // After the body of `let x = 1 in x`, using `x` at outer scope is an error.
+    // Here we just verify the inner binding is used correctly and the outer
+    // function result is the body value, not Unit.
+    assert_both_backends(
+        r#"fn f { Pure Int -> Int  in: n  out: let x = 10 in x + n }"#,
+        "f", Value::Int(5), Value::Int(15),
+    );
+}
+
+#[test]
+fn test_let_in_in_match_arm() {
+    assert_both_backends(
+        r#"fn f { Pure Int -> Int
+    in: n
+    out: match n == 0 {
+        true  -> let z = 99 in z
+        false -> let v = n * n in v
+    }
+}"#,
+        "f", Value::Int(7), Value::Int(49),
+    );
+}
+
+// =============================================================================
+// Sibling helpers can call each other
+// =============================================================================
+
+#[test]
+fn test_sibling_helper_call() {
+    assert_both_backends(
+        r#"fn compute {
+    Pure Int -> Int
+    in: n
+    out: double(n) + triple(n)
+    helpers: {
+        double :: Pure Int -> Int => it * 2
+        triple :: Pure Int -> Int => it * 3
+    }
+}"#,
+        "compute", Value::Int(4), Value::Int(20), // 8 + 12
+    );
+}
+
+#[test]
+fn test_sibling_helper_chain() {
+    // processLine calls helper, which calls another sibling helper
+    assert_both_backends(
+        r#"fn run {
+    Pure Int -> Int
+    in: n
+    out: step1(n)
+    helpers: {
+        step1 :: Pure Int -> Int => step2(it) + 1
+        step2 :: Pure Int -> Int => it * 10
+    }
+}"#,
+        "run", Value::Int(3), Value::Int(31), // step2(3)=30, step1=31
+    );
+}
+
+// =============================================================================
+// File.read / File.readLines
+// =============================================================================
+
+#[test]
+fn test_file_read() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("keln_test_file_read.txt");
+    std::fs::write(&path, "hello world").unwrap();
+    let path_str = path.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        r#"fn f {{ IO String -> String  in: p  out: File.read(p) }}"#
+    );
+    let result = run(&src, "f", Value::Str(path_str));
+    assert_eq!(result, Value::Str("hello world".to_string()));
+}
+
+#[test]
+fn test_file_read_lines() {
+    let dir = std::env::temp_dir();
+    let path = dir.join("keln_test_file_readlines.txt");
+    std::fs::write(&path, "line1\nline2\nline3").unwrap();
+    let path_str = path.to_string_lossy().replace('\\', "/");
+    let src = r#"fn f { IO String -> Int  in: p  out: List.length(File.readLines(p)) }"#;
+    let result = run(src, "f", Value::Str(path_str));
+    assert_eq!(result, Value::Int(3));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 
