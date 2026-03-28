@@ -11,6 +11,10 @@ use super::stdlib;
 /// in the synchronous evaluator where channels/tasks are not real).
 const MAX_ITER: usize = 100_000;
 
+/// Maximum non-tail call depth before returning a clean error instead of
+/// overflowing the Rust stack. Deep recursion should use the bytecode VM.
+const MAX_CALL_DEPTH: usize = 2_000;
+
 pub struct Evaluator {
     pub(crate) env: Env,
     /// All user-defined function declarations (by name).
@@ -19,6 +23,8 @@ pub struct Evaluator {
     pub(crate) mock_fns: HashMap<String, Vec<(ast::Pattern, ast::Expr)>>,
     /// Inline field constraints by variant/product-type name → field declarations.
     pub(crate) variant_fields: HashMap<String, Vec<ast::FieldTypeDecl>>,
+    /// Current non-tail call depth — guards against Rust stack overflow.
+    pub(crate) call_depth: usize,
 }
 
 impl Default for Evaluator {
@@ -29,7 +35,7 @@ impl Default for Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new() }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0 }
     }
 
     // =========================================================================
@@ -105,17 +111,26 @@ impl Evaluator {
     // =========================================================================
 
     pub fn call_fn(&mut self, fn_name: &str, arg: Value) -> Result<Value, RuntimeError> {
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(RuntimeError::new(format!(
+                "call depth limit ({}) exceeded — use the bytecode VM for deep recursion",
+                MAX_CALL_DEPTH
+            )));
+        }
+        self.call_depth += 1;
         let mut cur_name = fn_name.to_string();
         let mut cur_arg = arg;
         for _ in 0..MAX_ITER {
-            match self.eval_fn_once(&cur_name, cur_arg)? {
-                Thunk::Value(v) => return Ok(v),
-                Thunk::TailCall { fn_name, arg } => {
+            match self.eval_fn_once(&cur_name, cur_arg) {
+                Err(e) => { self.call_depth -= 1; return Err(e); }
+                Ok(Thunk::Value(v)) => { self.call_depth -= 1; return Ok(v); }
+                Ok(Thunk::TailCall { fn_name, arg }) => {
                     cur_name = fn_name;
                     cur_arg = arg;
                 }
             }
         }
+        self.call_depth -= 1;
         Err(RuntimeError::new(format!(
             "exceeded {} iterations in '{}'", MAX_ITER, cur_name
         )))

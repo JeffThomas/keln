@@ -1133,6 +1133,33 @@ impl Parser {
             }
             (TT_SYMBOL, "{") => self.parse_record_expr(None),
             (TT_SYMBOL, "[") => self.parse_list_expr(),
+            (TT_SYMBOL, "-") => {
+                self.advance()?;
+                // Unary minus: fold into numeric literals directly, otherwise 0 - expr.
+                match self.peek().map(|t| (t.token_type, t.value.as_str())) {
+                    Some((TT_INTEGER, _)) => {
+                        let tok = self.advance()?;
+                        let n: i64 = tok.value.parse()
+                            .map_err(|_| ParseError::at(&tok, "invalid integer"))?;
+                        Ok(Expr::IntLiteral(-n, span))
+                    }
+                    Some((TT_FLOAT, _)) => {
+                        let tok = self.advance()?;
+                        let f: f64 = tok.value.parse()
+                            .map_err(|_| ParseError::at(&tok, "invalid float"))?;
+                        Ok(Expr::FloatLiteral(-f, span))
+                    }
+                    _ => {
+                        let inner = self.parse_atom_expr()?;
+                        Ok(Expr::BinaryOp {
+                            op: BinaryOp::Sub,
+                            left: Box::new(Expr::IntLiteral(0, span.clone())),
+                            right: Box::new(inner),
+                            span,
+                        })
+                    }
+                }
+            }
             (TT_OPERATOR, "<-") => {
                 self.advance()?;
                 let channel = self.parse_atom_expr()?;

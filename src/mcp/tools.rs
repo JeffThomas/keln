@@ -103,28 +103,40 @@ impl KelnServer {
         &self,
         Parameters(VerifyInput { source }): Parameters<VerifyInput>,
     ) -> Result<CallToolResult, McpError> {
-        let mut ex = match crate::verify::VerifyExecutor::from_source(&source) {
-            Ok(ex) => ex,
-            Err(e) => {
-                let result = serde_json::json!({
-                    "compile_errors": [e],
-                    "test_failures": [],
-                    "coverage_gaps": [],
-                    "proof_violations": [],
-                    "fuzz_status": [],
-                    "is_clean": false
-                });
-                return Ok(CallToolResult::success(vec![Content::text(
-                    result.to_string(),
-                )]));
-            }
-        };
+        // Run in a thread with a large stack to support deeply recursive Keln programs
+        // evaluated by the tree-walking evaluator (given/forall cases).
+        let json_str = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024) // 64 MB
+            .spawn(move || {
+                let mut ex = match crate::verify::VerifyExecutor::from_source(&source) {
+                    Ok(ex) => ex,
+                    Err(e) => {
+                        return serde_json::json!({
+                            "compile_errors": [e],
+                            "test_failures": [],
+                            "coverage_gaps": [],
+                            "proof_violations": [],
+                            "fuzz_status": [],
+                            "is_clean": false
+                        }).to_string();
+                    }
+                };
+                let fn_results = ex.verify_all();
+                let mut vr = VerificationResult::from_fn_results(&fn_results);
+                vr.fuzz_status = ex.fuzz_trusted_modules();
+                vr.to_json()
+            })
+            .expect("failed to spawn verify thread")
+            .join()
+            .unwrap_or_else(|_| serde_json::json!({
+                "compile_errors": ["verify thread panicked"],
+                "test_failures": [],
+                "coverage_gaps": [],
+                "proof_violations": [],
+                "fuzz_status": [],
+                "is_clean": false
+            }).to_string());
 
-        let fn_results = ex.verify_all();
-        let mut vr = VerificationResult::from_fn_results(&fn_results);
-        vr.fuzz_status = ex.fuzz_trusted_modules();
-
-        let json_str = vr.to_json();
         Ok(CallToolResult::success(vec![Content::text(json_str)]))
     }
 
