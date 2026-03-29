@@ -1237,21 +1237,20 @@ pub fn dispatch(
         // =====================================================================
         // Map<K,V>
         // =====================================================================
-        "Map.empty" => Ok(Value::Map(vec![])),
+        "Map.empty" => Ok(Value::Map(std::collections::BTreeMap::new())),
         "Map.size" => {
             let v = one(args, "Map.size")?;
             match v {
-                Value::Map(pairs) => Ok(Value::Int(pairs.len() as i64)),
+                Value::Map(map) => Ok(Value::Int(map.len() as i64)),
                 _ => Err(RuntimeError::new("Map.size: expected Map")),
             }
         }
         "Map.insert" => {
             let (map, key, val) = three(args, "Map.insert")?;
             match map {
-                Value::Map(mut pairs) => {
-                    pairs.retain(|(k, _)| k != &key);
-                    pairs.push((key, val));
-                    Ok(Value::Map(pairs))
+                Value::Map(mut map) => {
+                    map.insert(key, val);
+                    Ok(Value::Map(map))
                 }
                 _ => Err(RuntimeError::new("Map.insert: expected Map as first arg")),
             }
@@ -1259,21 +1258,19 @@ pub fn dispatch(
         "Map.get" => {
             let (map, key) = two(args, "Map.get")?;
             match map {
-                Value::Map(pairs) => {
-                    match pairs.into_iter().find(|(k, _)| k == &key) {
-                        Some((_, v)) => Ok(some(v)),
-                        None => Ok(none()),
-                    }
-                }
+                Value::Map(map) => match map.get(&key) {
+                    Some(v) => Ok(some(v.clone())),
+                    None => Ok(none()),
+                },
                 _ => Err(RuntimeError::new("Map.get: expected Map")),
             }
         }
         "Map.remove" => {
             let (map, key) = two(args, "Map.remove")?;
             match map {
-                Value::Map(mut pairs) => {
-                    pairs.retain(|(k, _)| k != &key);
-                    Ok(Value::Map(pairs))
+                Value::Map(mut map) => {
+                    map.remove(&key);
+                    Ok(Value::Map(map))
                 }
                 _ => Err(RuntimeError::new("Map.remove: expected Map")),
             }
@@ -1281,29 +1278,29 @@ pub fn dispatch(
         "Map.contains" => {
             let (map, key) = two(args, "Map.contains")?;
             match map {
-                Value::Map(pairs) => Ok(Value::Bool(pairs.iter().any(|(k, _)| k == &key))),
+                Value::Map(map) => Ok(Value::Bool(map.contains_key(&key))),
                 _ => Err(RuntimeError::new("Map.contains: expected Map")),
             }
         }
         "Map.keys" => {
             let v = one(args, "Map.keys")?;
             match v {
-                Value::Map(pairs) => Ok(Value::List(pairs.into_iter().map(|(k, _)| k).collect())),
+                Value::Map(map) => Ok(Value::List(map.into_keys().collect())),
                 _ => Err(RuntimeError::new("Map.keys: expected Map")),
             }
         }
         "Map.values" => {
             let v = one(args, "Map.values")?;
             match v {
-                Value::Map(pairs) => Ok(Value::List(pairs.into_iter().map(|(_, v)| v).collect())),
+                Value::Map(map) => Ok(Value::List(map.into_values().collect())),
                 _ => Err(RuntimeError::new("Map.values: expected Map")),
             }
         }
         "Map.toList" => {
             let v = one(args, "Map.toList")?;
             match v {
-                Value::Map(pairs) => Ok(Value::List(
-                    pairs.into_iter().map(|(k, v)| {
+                Value::Map(map) => Ok(Value::List(
+                    map.into_iter().map(|(k, v)| {
                         Value::Record(vec![("key".to_string(), k), ("value".to_string(), v)])
                     }).collect()
                 )),
@@ -1314,19 +1311,18 @@ pub fn dispatch(
             let v = one(args, "Map.fromList")?;
             match v {
                 Value::List(items) => {
-                    let mut pairs = Vec::new();
+                    let mut map = std::collections::BTreeMap::new();
                     for item in items {
                         match item {
                             Value::Record(mut fields) if fields.len() >= 2 => {
                                 let (_, key) = fields.remove(0);
                                 let (_, val) = fields.remove(0);
-                                pairs.retain(|(k, _): &(Value, Value)| k != &key);
-                                pairs.push((key, val));
+                                map.insert(key, val);
                             }
                             _ => return Err(RuntimeError::new("Map.fromList: each item must be {key, value}")),
                         }
                     }
-                    Ok(Value::Map(pairs))
+                    Ok(Value::Map(map))
                 }
                 _ => Err(RuntimeError::new("Map.fromList: expected List")),
             }
@@ -1334,12 +1330,9 @@ pub fn dispatch(
         "Map.merge" => {
             let (a, b) = two(args, "Map.merge")?;
             match (a, b) {
-                (Value::Map(mut pairs_a), Value::Map(pairs_b)) => {
-                    for (k, v) in pairs_b {
-                        pairs_a.retain(|(existing_k, _)| existing_k != &k);
-                        pairs_a.push((k, v));
-                    }
-                    Ok(Value::Map(pairs_a))
+                (Value::Map(mut map_a), Value::Map(map_b)) => {
+                    map_a.extend(map_b);
+                    Ok(Value::Map(map_a))
                 }
                 _ => Err(RuntimeError::new("Map.merge: expected two Maps")),
             }
@@ -1348,22 +1341,20 @@ pub fn dispatch(
         // =====================================================================
         // Set<T>
         // =====================================================================
-        "Set.empty" => Ok(Value::Set(vec![])),
+        "Set.empty" => Ok(Value::Set(std::collections::BTreeSet::new())),
         "Set.size" => {
             let v = one(args, "Set.size")?;
             match v {
-                Value::Set(items) => Ok(Value::Int(items.len() as i64)),
+                Value::Set(set) => Ok(Value::Int(set.len() as i64)),
                 _ => Err(RuntimeError::new("Set.size: expected Set")),
             }
         }
         "Set.insert" => {
             let (set, item) = two(args, "Set.insert")?;
             match set {
-                Value::Set(mut items) => {
-                    if !items.contains(&item) {
-                        items.push(item);
-                    }
-                    Ok(Value::Set(items))
+                Value::Set(mut set) => {
+                    set.insert(item);
+                    Ok(Value::Set(set))
                 }
                 _ => Err(RuntimeError::new("Set.insert: expected Set")),
             }
@@ -1371,16 +1362,16 @@ pub fn dispatch(
         "Set.contains" => {
             let (set, item) = two(args, "Set.contains")?;
             match set {
-                Value::Set(items) => Ok(Value::Bool(items.contains(&item))),
+                Value::Set(set) => Ok(Value::Bool(set.contains(&item))),
                 _ => Err(RuntimeError::new("Set.contains: expected Set")),
             }
         }
         "Set.remove" => {
             let (set, item) = two(args, "Set.remove")?;
             match set {
-                Value::Set(mut items) => {
-                    items.retain(|x| x != &item);
-                    Ok(Value::Set(items))
+                Value::Set(mut set) => {
+                    set.remove(&item);
+                    Ok(Value::Set(set))
                 }
                 _ => Err(RuntimeError::new("Set.remove: expected Set")),
             }
@@ -1388,35 +1379,22 @@ pub fn dispatch(
         "Set.toList" => {
             let v = one(args, "Set.toList")?;
             match v {
-                Value::Set(items) => Ok(Value::List(items)),
+                Value::Set(set) => Ok(Value::List(set.into_iter().collect())),
                 _ => Err(RuntimeError::new("Set.toList: expected Set")),
             }
         }
         "Set.fromList" => {
             let v = one(args, "Set.fromList")?;
             match v {
-                Value::List(items) => {
-                    let mut unique = Vec::new();
-                    for item in items {
-                        if !unique.contains(&item) {
-                            unique.push(item);
-                        }
-                    }
-                    Ok(Value::Set(unique))
-                }
+                Value::List(items) => Ok(Value::Set(items.into_iter().collect())),
                 _ => Err(RuntimeError::new("Set.fromList: expected List")),
             }
         }
         "Set.union" => {
             let (a, b) = two(args, "Set.union")?;
             match (a, b) {
-                (Value::Set(mut items_a), Value::Set(items_b)) => {
-                    for item in items_b {
-                        if !items_a.contains(&item) {
-                            items_a.push(item);
-                        }
-                    }
-                    Ok(Value::Set(items_a))
+                (Value::Set(set_a), Value::Set(set_b)) => {
+                    Ok(Value::Set(set_a.union(&set_b).cloned().collect()))
                 }
                 _ => Err(RuntimeError::new("Set.union: expected two Sets")),
             }
@@ -1424,9 +1402,8 @@ pub fn dispatch(
         "Set.intersect" => {
             let (a, b) = two(args, "Set.intersect")?;
             match (a, b) {
-                (Value::Set(items_a), Value::Set(items_b)) => {
-                    let result = items_a.into_iter().filter(|x| items_b.contains(x)).collect();
-                    Ok(Value::Set(result))
+                (Value::Set(set_a), Value::Set(set_b)) => {
+                    Ok(Value::Set(set_a.intersection(&set_b).cloned().collect()))
                 }
                 _ => Err(RuntimeError::new("Set.intersect: expected two Sets")),
             }
@@ -1434,9 +1411,8 @@ pub fn dispatch(
         "Set.difference" => {
             let (a, b) = two(args, "Set.difference")?;
             match (a, b) {
-                (Value::Set(items_a), Value::Set(items_b)) => {
-                    let result = items_a.into_iter().filter(|x| !items_b.contains(x)).collect();
-                    Ok(Value::Set(result))
+                (Value::Set(set_a), Value::Set(set_b)) => {
+                    Ok(Value::Set(set_a.difference(&set_b).cloned().collect()))
                 }
                 _ => Err(RuntimeError::new("Set.difference: expected two Sets")),
             }
@@ -1634,8 +1610,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
                 fields.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
             serde_json::Value::Object(obj)
         }
-        Value::Map(pairs) => {
-            let obj: serde_json::Map<String, serde_json::Value> = pairs
+        Value::Map(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> = map
                 .iter()
                 .filter_map(|(k, v)| {
                     if let Value::Str(ks) = k {

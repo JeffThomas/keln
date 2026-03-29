@@ -49,15 +49,15 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
         Value::Timestamp(ms) => json!({ "$timestamp_ms": ms }),
         Value::Channel(_) => json!({ "$channel": true }),
         Value::Task(inner) => json!({ "$task": keln_value_to_json(inner) }),
-        Value::Map(pairs) => {
-            let entries: Vec<JValue> = pairs
+        Value::Map(map) => {
+            let entries: Vec<JValue> = map
                 .iter()
                 .map(|(k, v)| json!([keln_value_to_json(k), keln_value_to_json(v)]))
                 .collect();
             json!({ "$map": entries })
         }
-        Value::Set(items) => {
-            let arr: Vec<JValue> = items.iter().map(keln_value_to_json).collect();
+        Value::Set(set) => {
+            let arr: Vec<JValue> = set.iter().map(keln_value_to_json).collect();
             json!({ "$set": arr })
         }
         Value::PartialFn { name, .. } => json!({ "$partial": name }),

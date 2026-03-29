@@ -9,7 +9,7 @@ mod tests;
 mod integration_tests;
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
@@ -69,10 +69,10 @@ pub enum Value {
     Timestamp(i64),
     /// Completed task result (sync model)
     Task(Box<Value>),
-    /// Ordered key-value map (linear scan; keys compared by PartialEq)
-    Map(Vec<(Value, Value)>),
-    /// Ordered unique set (linear scan; elements compared by PartialEq)
-    Set(Vec<Value>),
+    /// Key-value map backed by BTreeMap for O(log n) operations
+    Map(BTreeMap<Value, Value>),
+    /// Unique set backed by BTreeSet for O(log n) operations
+    Set(BTreeSet<Value>),
     /// Compile-time phantom type descriptor — runtime representation of TypeRef<T>.
     /// Value is the type name string (e.g. "JobMessage", "Int").
     TypeRef(String),
@@ -96,13 +96,8 @@ impl PartialEq for Value {
             (Value::Unit, Value::Unit) => true,
             (Value::Duration(a), Value::Duration(b)) => a == b,
             (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
-            (Value::Map(a), Value::Map(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
-            }
-            (Value::Set(a), Value::Set(b)) => {
-                a.len() == b.len() && a.iter().all(|x| b.contains(x))
-            }
+            (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::Set(a), Value::Set(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Record(a), Value::Record(b)) => {
                 a.len() == b.len()
@@ -127,6 +122,107 @@ impl PartialEq for VariantPayload {
                     && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
             }
             _ => false,
+        }
+    }
+}
+
+impl Eq for Value {}
+impl Eq for VariantPayload {}
+
+impl PartialOrd for Value {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Value {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        fn disc(v: &Value) -> u8 {
+            match v {
+                Value::Unit => 0,
+                Value::Bool(_) => 1,
+                Value::Int(_) => 2,
+                Value::Float(_) => 3,
+                Value::Str(_) => 4,
+                Value::Bytes(_) => 5,
+                Value::Duration(_) => 6,
+                Value::Timestamp(_) => 7,
+                Value::List(_) => 8,
+                Value::Record(_) => 9,
+                Value::Variant { .. } => 10,
+                Value::Map(_) => 11,
+                Value::Set(_) => 12,
+                Value::FnRef(_) => 13,
+                Value::PartialFn { .. } => 14,
+                Value::Channel(_) => 15,
+                Value::Task(_) => 16,
+                Value::TypeRef(_) => 17,
+            }
+        }
+        let d = disc(self).cmp(&disc(other));
+        if d != Ordering::Equal { return d; }
+        match (self, other) {
+            (Value::Unit, Value::Unit) => Ordering::Equal,
+            (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
+            (Value::Str(a), Value::Str(b)) => a.cmp(b),
+            (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
+            (Value::Duration(a), Value::Duration(b)) => a.cmp(b),
+            (Value::Timestamp(a), Value::Timestamp(b)) => a.cmp(b),
+            (Value::List(a), Value::List(b)) => a.cmp(b),
+            (Value::Record(a), Value::Record(b)) => {
+                let mut a = a.clone(); a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                let mut b = b.clone(); b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                a.len().cmp(&b.len()).then_with(|| {
+                    a.iter().zip(b.iter())
+                        .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
+                        .find(|o| *o != Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
+                })
+            }
+            (Value::Variant { name: n1, payload: p1 }, Value::Variant { name: n2, payload: p2 }) => {
+                n1.cmp(n2).then_with(|| p1.cmp(p2))
+            }
+            (Value::Map(a), Value::Map(b)) => a.cmp(b),
+            (Value::Set(a), Value::Set(b)) => a.cmp(b),
+            (Value::FnRef(a), Value::FnRef(b)) => a.cmp(b),
+            (Value::PartialFn { name: n1, .. }, Value::PartialFn { name: n2, .. }) => n1.cmp(n2),
+            (Value::Channel(_), Value::Channel(_)) => Ordering::Equal,
+            (Value::Task(a), Value::Task(b)) => a.cmp(b),
+            (Value::TypeRef(a), Value::TypeRef(b)) => a.cmp(b),
+            _ => unreachable!("discriminants matched but variant arms did not"),
+        }
+    }
+}
+
+impl PartialOrd for VariantPayload {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for VariantPayload {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        match (self, other) {
+            (VariantPayload::Unit, VariantPayload::Unit) => Ordering::Equal,
+            (VariantPayload::Unit, _) => Ordering::Less,
+            (_, VariantPayload::Unit) => Ordering::Greater,
+            (VariantPayload::Tuple(a), VariantPayload::Tuple(b)) => a.cmp(b),
+            (VariantPayload::Tuple(_), _) => Ordering::Less,
+            (_, VariantPayload::Tuple(_)) => Ordering::Greater,
+            (VariantPayload::Record(a), VariantPayload::Record(b)) => {
+                let mut a = a.clone(); a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                let mut b = b.clone(); b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                a.len().cmp(&b.len()).then_with(|| {
+                    a.iter().zip(b.iter())
+                        .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
+                        .find(|o| *o != Ordering::Equal)
+                        .unwrap_or(Ordering::Equal)
+                })
+            }
         }
     }
 }
@@ -180,17 +276,17 @@ impl fmt::Display for Value {
             Value::Duration(ms) => write!(f, "<duration:{}ms>", ms),
             Value::Timestamp(ms) => write!(f, "<timestamp:{}>", ms),
             Value::Task(v) => write!(f, "<task:{}>", v),
-            Value::Map(pairs) => {
+            Value::Map(map) => {
                 write!(f, "Map{{")?;
-                for (i, (k, v)) in pairs.iter().enumerate() {
+                for (i, (k, v)) in map.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}: {}", k, v)?;
                 }
                 write!(f, "}}")
             }
-            Value::Set(items) => {
+            Value::Set(set) => {
                 write!(f, "Set{{")?;
-                for (i, v) in items.iter().enumerate() {
+                for (i, v) in set.iter().enumerate() {
                     if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}", v)?;
                 }
