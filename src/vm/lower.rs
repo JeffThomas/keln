@@ -331,10 +331,9 @@ impl Lowerer {
     fn lower_fn_decl(&mut self, fd: &ast::FnDecl) -> Result<KelnFn, LowerError> {
         let mut ctx = FnCtx::new(&fd.name);
         // Seed closeable bindings from the declared input type.
-        if Self::is_closeable_type(&fd.signature.input_type) {
-            if let Some(name) = Self::simple_binding_name(&fd.in_clause) {
-                ctx.closeable_bindings.insert(name.to_string());
-            }
+        if Self::is_closeable_type(&fd.signature.input_type)
+            && let Some(name) = Self::simple_binding_name(&fd.in_clause) {
+            ctx.closeable_bindings.insert(name.to_string());
         }
         // Bind in: pattern to R0
         self.lower_in_pattern(&mut ctx, &fd.in_clause, 0)?;
@@ -609,10 +608,9 @@ impl Lowerer {
             Expr::Let(binding) => {
                 let val_reg = self.lower_expr(ctx, &binding.value, false)?;
                 // Track closeable channel bindings for type-driven recv lowering.
-                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. }) {
-                    if let Some(name) = Self::simple_binding_name(&binding.pattern) {
-                        ctx.closeable_bindings.insert(name.to_string());
-                    }
+                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. })
+                    && let Some(name) = Self::simple_binding_name(&binding.pattern) {
+                    ctx.closeable_bindings.insert(name.to_string());
                 }
                 self.lower_in_pattern(ctx, &binding.pattern, val_reg)?;
                 Ok(val_reg)
@@ -620,10 +618,9 @@ impl Lowerer {
 
             Expr::LetIn { binding, body, .. } => {
                 let val_reg = self.lower_expr(ctx, &binding.value, false)?;
-                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. }) {
-                    if let Some(name) = Self::simple_binding_name(&binding.pattern) {
-                        ctx.closeable_bindings.insert(name.to_string());
-                    }
+                if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. })
+                    && let Some(name) = Self::simple_binding_name(&binding.pattern) {
+                    ctx.closeable_bindings.insert(name.to_string());
                 }
                 ctx.push_scope();
                 self.lower_in_pattern(ctx, &binding.pattern, val_reg)?;
@@ -876,7 +873,7 @@ impl Lowerer {
     /// - Sibling: `parent::bare`     — a helper defined alongside the current function
     ///
     /// Returns `None` if no match is found.
-    fn resolve_scoped_fn<'a>(&self, ctx: &FnCtx, bare: &'a str) -> Option<String> {
+    fn resolve_scoped_fn(&self, ctx: &FnCtx, bare: &str) -> Option<String> {
         if self.user_fns.contains(bare) {
             return Some(bare.to_string());
         }

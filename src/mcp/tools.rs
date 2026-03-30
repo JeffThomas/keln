@@ -50,6 +50,12 @@ pub struct KelnServer {
     tool_router: ToolRouter<KelnServer>,
 }
 
+impl Default for KelnServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[tool_router]
 impl KelnServer {
     pub fn new() -> Self {

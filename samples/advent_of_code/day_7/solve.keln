@@ -1,0 +1,78 @@
+-- AoC Day 7: Laboratories
+--
+-- Simulate tachyon beams moving downward through a grid.
+-- 'S' = start, '.' = pass-through, '^' = splitter (beam stops, new
+-- beams start left and right). Count total splits across all rows.
+--
+-- Per-row BFS: tail-recursive bfsRow processes a queue of column
+-- indices, deduplicating via a visited Set. Splitters enqueue c-1
+-- and c+1; '.' columns go to the next-row output Set.
+--
+-- Note: Set.empty acts as a FnRef in arg position — use Set.fromList([]).
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let grid     = File.readLines(path) in
+        let startCol = findS(Maybe.getOr(List.head(grid), "")) in
+        List.fold(
+            grid,
+            { splits: 0, active: Set.fromList([startCol]) },
+            processRow
+        ).splits
+
+    helpers: {
+        findS :: Pure String -> Int =>
+            List.fold(
+                List.range(0, String.len(it)),
+                { found: 0, row: it },
+                findSStep
+            ).found
+
+        findSStep :: Pure { acc: { found: Int, row: String }, item: Int } -> { found: Int, row: String } =>
+            let ch = String.slice(it.acc.row, it.item, it.item + 1) in
+            match ch == "S" {
+                true  -> { found: it.item, row: it.acc.row }
+                false -> it.acc
+            }
+
+        processRow :: Pure { acc: { splits: Int, active: Set<Int> }, item: String } -> { splits: Int, active: Set<Int> } =>
+            let res = bfsRow({ queue: Set.toList(it.acc.active), visited: Set.fromList([]), output: Set.fromList([]), splits: 0, row: it.item }) in
+            { splits: it.acc.splits + res.splits, active: Set.fromList(res.next) }
+
+        bfsRow :: Pure { queue: List<Int>, visited: Set<Int>, output: Set<Int>, splits: Int, row: String } -> { next: List<Int>, splits: Int } =>
+            match List.isEmpty(it.queue) {
+                true  -> { next: Set.toList(it.output), splits: it.splits }
+                false ->
+                    let c    = Maybe.getOr(List.head(it.queue), 0) in
+                    let rest = List.tail(it.queue) in
+                    match Set.contains(it.visited, c) {
+                        true  -> bfsRow({ queue: rest, visited: it.visited, output: it.output, splits: it.splits, row: it.row })
+                        false ->
+                            let vis2 = Set.insert(it.visited, c) in
+                            match c < 0 {
+                                true  -> bfsRow({ queue: rest, visited: vis2, output: it.output, splits: it.splits, row: it.row })
+                                false ->
+                                    match c >= String.len(it.row) {
+                                        true  -> bfsRow({ queue: rest, visited: vis2, output: it.output, splits: it.splits, row: it.row })
+                                        false ->
+                                            let ch = String.slice(it.row, c, c + 1) in
+                                            match ch == "^" {
+                                                true  ->
+                                                    let q2 = List.append(List.append(rest, c - 1), c + 1) in
+                                                    bfsRow({ queue: q2, visited: vis2, output: it.output, splits: it.splits + 1, row: it.row })
+                                                false ->
+                                                    bfsRow({ queue: rest, visited: vis2, output: Set.insert(it.output, c), splits: it.splits, row: it.row })
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_7/input.txt") -> 1690
+    }
+}

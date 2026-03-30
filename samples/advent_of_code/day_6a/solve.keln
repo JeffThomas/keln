@@ -1,0 +1,106 @@
+-- AoC Day 6a: Trash Compactor Part Two
+--
+-- Same column-scan as Day 6, but numbers are now read vertically:
+-- each column within a problem is one number (digits top-to-bottom),
+-- and columns are processed right-to-left.
+--
+-- On separator after a problem: call computeProb which reverses the
+-- column range, then folds over each column extracting one number
+-- (concat of all number-row chars at that column, trimmed).
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        let r0    = Maybe.getOr(List.head(lines), "") in
+        let r1    = Maybe.getOr(List.head(List.drop(lines, 1)), "") in
+        let r2    = Maybe.getOr(List.head(List.drop(lines, 2)), "") in
+        let r3    = Maybe.getOr(List.head(List.drop(lines, 3)), "") in
+        let opRow = Maybe.getOr(List.head(List.drop(lines, 4)), "") in
+        let width = String.len(opRow) in
+        List.fold(
+            List.range(0, width + 1),
+            { total: 0, start: 0, inProb: false, r0: r0, r1: r1, r2: r2, r3: r3, opRow: opRow, width: width },
+            processCol
+        ).total
+
+    helpers: {
+        processCol :: Pure { acc: { total: Int, start: Int, inProb: Bool, r0: String, r1: String, r2: String, r3: String, opRow: String, width: Int }, item: Int } -> { total: Int, start: Int, inProb: Bool, r0: String, r1: String, r2: String, r3: String, opRow: String, width: Int } =>
+            let c       = it.item in
+            let pastEnd = c >= it.acc.width in
+            let sep     = match pastEnd {
+                true  -> true
+                false -> checkSep({ r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, c: c })
+            } in
+            match sep {
+                true ->
+                    match it.acc.inProb {
+                        false -> it.acc
+                        true  ->
+                            let res = computeProb({ lo: it.acc.start, hi: c - 1, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow }) in
+                            { total: it.acc.total + res, start: 0, inProb: false, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, width: it.acc.width }
+                    }
+                false ->
+                    match it.acc.inProb {
+                        true  -> it.acc
+                        false -> { total: it.acc.total, start: c, inProb: true, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, width: it.acc.width }
+                    }
+            }
+
+        checkSep :: Pure { r0: String, r1: String, r2: String, r3: String, opRow: String, c: Int } -> Bool =>
+            let c0 = String.slice(it.r0, it.c, it.c + 1) in
+            match c0 == " " {
+                false -> false
+                true  ->
+                    let c1 = String.slice(it.r1, it.c, it.c + 1) in
+                    match c1 == " " {
+                        false -> false
+                        true  ->
+                            let c2 = String.slice(it.r2, it.c, it.c + 1) in
+                            match c2 == " " {
+                                false -> false
+                                true  ->
+                                    let c3 = String.slice(it.r3, it.c, it.c + 1) in
+                                    match c3 == " " {
+                                        false -> false
+                                        true  ->
+                                            let co = String.slice(it.opRow, it.c, it.c + 1) in
+                                            co == " "
+                                    }
+                            }
+                    }
+            }
+
+        computeProb :: Pure { lo: Int, hi: Int, r0: String, r1: String, r2: String, r3: String, opRow: String } -> Int =>
+            let cols  = List.reverse(List.range(it.lo, it.hi + 1)) in
+            let state = List.fold(cols, { nums: [], op: "", r0: it.r0, r1: it.r1, r2: it.r2, r3: it.r3, opRow: it.opRow }, collectCol) in
+            match state.op == "*" {
+                true  -> List.fold(state.nums, 1, mulStep)
+                false -> List.fold(state.nums, 0, addStep)
+            }
+
+        collectCol :: Pure { acc: { nums: List<Int>, op: String, r0: String, r1: String, r2: String, r3: String, opRow: String }, item: Int } -> { nums: List<Int>, op: String, r0: String, r1: String, r2: String, r3: String, opRow: String } =>
+            let c      = it.item in
+            let ch0    = String.slice(it.acc.r0,    c, c + 1) in
+            let ch1    = String.slice(it.acc.r1,    c, c + 1) in
+            let ch2    = String.slice(it.acc.r2,    c, c + 1) in
+            let ch3    = String.slice(it.acc.r3,    c, c + 1) in
+            let chOp   = String.slice(it.acc.opRow, c, c + 1) in
+            let numStr = String.trim(String.concat(String.concat(String.concat(ch0, ch1), ch2), ch3)) in
+            let newOp  = match chOp == " " { true -> it.acc.op  false -> chOp } in
+            let newNums = match String.len(numStr) == 0 {
+                true  -> it.acc.nums
+                false -> List.append(it.acc.nums, Result.unwrap(Int.parse(numStr)))
+            } in
+            { nums: newNums, op: newOp, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow }
+
+        mulStep :: Pure { acc: Int, item: Int } -> Int => it.acc * it.item
+        addStep :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_6a/input.txt") -> 11136895955912
+    }
+}

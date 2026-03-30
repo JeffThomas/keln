@@ -1,0 +1,97 @@
+-- AoC Day 6: Trash Compactor
+--
+-- Parse a vertical-column math worksheet. Numbers are stacked vertically
+-- per problem; problems are separated by all-space columns. For each
+-- problem, read one number per row (horizontal), apply + or *, sum all.
+--
+-- Column scan: iterate 0..width, check if all rows have space (separator).
+-- On separator after a problem: finalize (parse row substrings, apply op).
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        let r0    = Maybe.getOr(List.head(lines), "") in
+        let r1    = Maybe.getOr(List.head(List.drop(lines, 1)), "") in
+        let r2    = Maybe.getOr(List.head(List.drop(lines, 2)), "") in
+        let r3    = Maybe.getOr(List.head(List.drop(lines, 3)), "") in
+        let opRow = Maybe.getOr(List.head(List.drop(lines, 4)), "") in
+        let width = String.len(opRow) in
+        List.fold(
+            List.range(0, width + 1),
+            { total: 0, n0: "", n1: "", n2: "", n3: "", op: "", inProb: false, r0: r0, r1: r1, r2: r2, r3: r3, opRow: opRow, width: width },
+            processCol
+        ).total
+
+    helpers: {
+        processCol :: Pure { acc: { total: Int, n0: String, n1: String, n2: String, n3: String, op: String, inProb: Bool, r0: String, r1: String, r2: String, r3: String, opRow: String, width: Int }, item: Int } -> { total: Int, n0: String, n1: String, n2: String, n3: String, op: String, inProb: Bool, r0: String, r1: String, r2: String, r3: String, opRow: String, width: Int } =>
+            let c       = it.item in
+            let pastEnd = c >= it.acc.width in
+            let sep     = match pastEnd {
+                true  -> true
+                false -> checkSep({ r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, c: c })
+            } in
+            match sep {
+                true  ->
+                    match it.acc.inProb {
+                        false -> it.acc
+                        true  ->
+                            let res = computeProblem({ n0: it.acc.n0, n1: it.acc.n1, n2: it.acc.n2, n3: it.acc.n3, op: it.acc.op }) in
+                            { total: it.acc.total + res, n0: "", n1: "", n2: "", n3: "", op: "", inProb: false, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, width: it.acc.width }
+                    }
+                false ->
+                    let ch0  = String.slice(it.acc.r0,    c, c + 1) in
+                    let ch1  = String.slice(it.acc.r1,    c, c + 1) in
+                    let ch2  = String.slice(it.acc.r2,    c, c + 1) in
+                    let ch3  = String.slice(it.acc.r3,    c, c + 1) in
+                    let chOp = String.slice(it.acc.opRow, c, c + 1) in
+                    { total: it.acc.total, n0: String.concat(it.acc.n0, ch0), n1: String.concat(it.acc.n1, ch1), n2: String.concat(it.acc.n2, ch2), n3: String.concat(it.acc.n3, ch3), op: String.concat(it.acc.op, chOp), inProb: true, r0: it.acc.r0, r1: it.acc.r1, r2: it.acc.r2, r3: it.acc.r3, opRow: it.acc.opRow, width: it.acc.width }
+            }
+
+        checkSep :: Pure { r0: String, r1: String, r2: String, r3: String, opRow: String, c: Int } -> Bool =>
+            let c0 = String.slice(it.r0, it.c, it.c + 1) in
+            match c0 == " " {
+                false -> false
+                true  ->
+                    let c1 = String.slice(it.r1, it.c, it.c + 1) in
+                    match c1 == " " {
+                        false -> false
+                        true  ->
+                            let c2 = String.slice(it.r2, it.c, it.c + 1) in
+                            match c2 == " " {
+                                false -> false
+                                true  ->
+                                    let c3 = String.slice(it.r3, it.c, it.c + 1) in
+                                    match c3 == " " {
+                                        false -> false
+                                        true  ->
+                                            let co = String.slice(it.opRow, it.c, it.c + 1) in
+                                            co == " "
+                                    }
+                            }
+                    }
+            }
+
+        computeProblem :: Pure { n0: String, n1: String, n2: String, n3: String, op: String } -> Int =>
+            let nums   = [
+                Result.unwrap(Int.parse(String.trim(it.n0))),
+                Result.unwrap(Int.parse(String.trim(it.n1))),
+                Result.unwrap(Int.parse(String.trim(it.n2))),
+                Result.unwrap(Int.parse(String.trim(it.n3)))
+            ] in
+            let opTrim = String.trim(it.op) in
+            match opTrim == "*" {
+                true  -> List.fold(nums, 1, mulStep)
+                false -> List.fold(nums, 0, addStep)
+            }
+
+        mulStep :: Pure { acc: Int, item: Int } -> Int => it.acc * it.item
+        addStep :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_6/input.txt") -> 6343365546996
+    }
+}

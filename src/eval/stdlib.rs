@@ -1311,6 +1311,7 @@ pub fn dispatch(
             let v = one(args, "Map.fromList")?;
             match v {
                 Value::List(items) => {
+                    #[allow(clippy::mutable_key_type)]
                     let mut map = std::collections::BTreeMap::new();
                     for item in items {
                         match item {

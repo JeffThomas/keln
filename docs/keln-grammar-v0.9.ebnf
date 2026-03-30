@@ -751,6 +751,7 @@
     | <expr> "-" <expr>      (* Int subtraction *)
     | <expr> "*" <expr>      (* Int multiplication *)
     | <expr> "/" <expr>      (* Int division; result is Int (truncated) *)
+    | <expr> "%" <expr>      (* Int modulo *)
 
 -- Float arithmetic uses stdlib functions: Float.add, Float.multiply, etc.
 -- There are no Float arithmetic operators in the language.
@@ -1018,7 +1019,7 @@
 -- Level 1  (loosest)  Pipeline         |>         left-associative
 -- Level 2             Comparison       == != < <= > >=  non-associative
 -- Level 3             Addition         + -        left-associative
--- Level 4             Multiplication   * /        left-associative
+-- Level 4             Multiplication   * / %      left-associative
 -- Level 5             Field access     .          left-associative
 -- Level 6             Function call    f(...)     left-associative
 -- Level 7  (tightest) .with binding    .with(...)  left-associative

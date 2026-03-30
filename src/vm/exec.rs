@@ -580,34 +580,25 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
     match name {
         "List.fold" | "List.foldl" => {
             // fold(list, init, fn)  — fn: { acc, item } -> acc
-            if let [ref list, ref init, ref fn_val] = args[..] {
-                if let Value::FnRef(fn_name) = fn_val {
-                    if module.fn_idx(fn_name).is_some() {
-                        return exec_fold_user(module, list.clone(), init.clone(), fn_name);
-                    }
-                }
+            if let [list, init, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_fold_user(module, list.clone(), init.clone(), fn_name);
             }
             dispatch_builtin(name, args)
         }
         "List.map" => {
             // map(list, fn)  — fn: item -> mapped
-            if let [ref list, ref fn_val] = args[..] {
-                if let Value::FnRef(fn_name) = fn_val {
-                    if module.fn_idx(fn_name).is_some() {
-                        return exec_map_user(module, list.clone(), fn_name);
-                    }
-                }
+            if let [list, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_map_user(module, list.clone(), fn_name);
             }
             dispatch_builtin(name, args)
         }
         "List.filter" => {
             // filter(list, fn)  — fn: item -> Bool
-            if let [ref list, ref fn_val] = args[..] {
-                if let Value::FnRef(fn_name) = fn_val {
-                    if module.fn_idx(fn_name).is_some() {
-                        return exec_filter_user(module, list.clone(), fn_name);
-                    }
-                }
+            if let [list, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_filter_user(module, list.clone(), fn_name);
             }
             dispatch_builtin(name, args)
         }
