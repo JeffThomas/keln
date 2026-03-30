@@ -331,6 +331,8 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "Result.unwrap",
     // File I/O (165–166)
     "File.read", "File.readLines",
+    // List extras (167–168)
+    "List.sort", "List.combinations2",
 ];
 
 pub struct BuiltinTable {

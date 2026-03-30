@@ -1,0 +1,94 @@
+-- AoC Day 8: Playground
+--
+-- Connect the 1000 closest pairs of 3D junction boxes (Kruskal-style).
+-- Then multiply the sizes of the three largest connected components.
+--
+-- Algorithm:
+--   1. Parse all points as {x,y,z} records.
+--   2. List.combinations2 generates all {fst,i,j,snd} pairs natively in Rust
+--      (avoids O(N^2) accumulator cloning that killed the fold approach).
+--   3. List.map computes squared Euclidean distance for each pair.
+--   4. List.sort sorts by {dist,i,j} — alphabetically "dist" < "i" < "j",
+--      so records naturally sort by distance first.
+--   5. List.take(sorted, 1000) gives the 1000 shortest.
+--   6. Union-find (fold over edges, Map<Int,Int> parent table).
+--   7. Count component sizes, sort descending, multiply top 3.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines    = File.readLines(path) in
+        let pts      = List.map(lines, parsePt) in
+        let rawPairs = List.combinations2(pts) in
+        let dists    = List.map(rawPairs, computeDist) in
+        let sorted   = List.sort(dists) in
+        let top      = List.take(sorted, 1000) in
+        let n        = List.len(pts) in
+        let initUF   = makeUF(n) in
+        let uf       = List.fold(top, initUF, applyEdge) in
+        let sizes    = Map.values(countSizes({ uf: uf, n: n })) in
+        let top3     = List.take(List.reverse(List.sort(sizes)), 3) in
+        List.fold(top3, 1, multStep)
+
+    helpers: {
+        parsePt :: Pure String -> { x: Int, y: Int, z: Int } =>
+            let parts = String.split(it, ",") in
+            let xStr  = Maybe.getOr(List.head(parts), "0") in
+            let tail1 = List.tail(parts) in
+            let yStr  = Maybe.getOr(List.head(tail1), "0") in
+            let tail2 = List.tail(tail1) in
+            let zStr  = Maybe.getOr(List.head(tail2), "0") in
+            { x: Result.unwrapOr(Int.parse(xStr), 0),
+              y: Result.unwrapOr(Int.parse(yStr), 0),
+              z: Result.unwrapOr(Int.parse(zStr), 0) }
+
+        -- List.combinations2 returns {fst: pt, i: Int, j: Int, snd: pt}
+        computeDist :: Pure { fst: { x: Int, y: Int, z: Int }, i: Int, j: Int, snd: { x: Int, y: Int, z: Int } } -> { dist: Int, i: Int, j: Int } =>
+            let dx = it.fst.x - it.snd.x in
+            let dy = it.fst.y - it.snd.y in
+            let dz = it.fst.z - it.snd.z in
+            { dist: dx * dx + dy * dy + dz * dz, i: it.i, j: it.j }
+
+        makeUF :: Pure Int -> Map<Int,Int> =>
+            List.fold(List.range(0, it), Map.fromList([]), initUFStep)
+
+        initUFStep :: Pure { acc: Map<Int,Int>, item: Int } -> Map<Int,Int> =>
+            Map.insert(it.acc, it.item, it.item)
+
+        find :: Pure { uf: Map<Int,Int>, i: Int } -> Int =>
+            let p = Maybe.getOr(Map.get(it.uf, it.i), it.i) in
+            match p == it.i {
+                true  -> it.i
+                false -> find({ uf: it.uf, i: p })
+            }
+
+        applyEdge :: Pure { acc: Map<Int,Int>, item: { dist: Int, i: Int, j: Int } } -> Map<Int,Int> =>
+            let ri = find({ uf: it.acc, i: it.item.i }) in
+            let rj = find({ uf: it.acc, i: it.item.j }) in
+            match ri == rj {
+                true  -> it.acc
+                false -> Map.insert(it.acc, ri, rj)
+            }
+
+        countSizes :: Pure { uf: Map<Int,Int>, n: Int } -> Map<Int,Int> =>
+            List.fold(
+                List.range(0, it.n),
+                { counts: Map.fromList([]), uf: it.uf },
+                countOneNode
+            ).counts
+
+        countOneNode :: Pure { acc: { counts: Map<Int,Int>, uf: Map<Int,Int> }, item: Int } -> { counts: Map<Int,Int>, uf: Map<Int,Int> } =>
+            let root = find({ uf: it.acc.uf, i: it.item }) in
+            let cur  = Maybe.getOr(Map.get(it.acc.counts, root), 0) in
+            { counts: Map.insert(it.acc.counts, root, cur + 1), uf: it.acc.uf }
+
+        multStep :: Pure { acc: Int, item: Int } -> Int =>
+            it.acc * it.item
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_8/input.txt") -> 50568
+    }
+}

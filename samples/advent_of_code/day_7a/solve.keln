@@ -1,0 +1,114 @@
+-- AoC Day 7a: Laboratories Part Two
+--
+-- Count distinct timelines under many-worlds interpretation.
+-- f(row, col) = timelines from beam entering at (row, col) downward:
+--   '.' or 'S': passes through to row+1 at same col
+--   '^': within-row BFS finds output columns (pass-throughs) and
+--        out-of-bounds exits; f = exits + sum(f(row+1, oc))
+-- Base case: beam below last row = 1 timeline (exits bottom).
+--
+-- Computed bottom-up: fold over reversed grid, maintaining nextMap
+-- (col -> timeline count for the row below).  Each row builds a
+-- colMap that becomes nextMap for the row above.
+--
+-- Note: Map.empty used only in let bindings to avoid FnRef issue.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let grid     = File.readLines(path) in
+        let firstRow = Maybe.getOr(List.head(grid), "") in
+        let width    = String.len(firstRow) in
+        let startCol = findS(firstRow) in
+        let emptyMap = Map.fromList([]) in
+        let finalAcc = List.fold(
+            List.reverse(grid),
+            { nextMap: emptyMap, width: width },
+            processRow
+        ) in
+        Maybe.getOr(Map.get(finalAcc.nextMap, startCol), 1)
+
+    helpers: {
+        findS :: Pure String -> Int =>
+            List.fold(
+                List.range(0, String.len(it)),
+                { found: 0, row: it },
+                findSStep
+            ).found
+
+        findSStep :: Pure { acc: { found: Int, row: String }, item: Int } -> { found: Int, row: String } =>
+            let ch = String.slice(it.acc.row, it.item, it.item + 1) in
+            match ch == "S" {
+                true  -> { found: it.item, row: it.acc.row }
+                false -> it.acc
+            }
+
+        processRow :: Pure { acc: { nextMap: Map<Int,Int>, width: Int }, item: String } -> { nextMap: Map<Int,Int>, width: Int } =>
+            let rowStr      = it.item in
+            let width       = it.acc.width in
+            let nextMap     = it.acc.nextMap in
+            let emptyColMap = Map.fromList([]) in
+            let result      = List.fold(
+                List.range(0, width),
+                { colMap: emptyColMap, rowStr: rowStr, width: width, nextMap: nextMap },
+                buildColEntry
+            ) in
+            { nextMap: result.colMap, width: width }
+
+        buildColEntry :: Pure { acc: { colMap: Map<Int,Int>, rowStr: String, width: Int, nextMap: Map<Int,Int> }, item: Int } -> { colMap: Map<Int,Int>, rowStr: String, width: Int, nextMap: Map<Int,Int> } =>
+            let col   = it.item in
+            let count = rowBFS({
+                queue:   [col],
+                visited: Set.fromList([]),
+                outputs: Set.fromList([]),
+                exits:   0,
+                rowStr:  it.acc.rowStr,
+                width:   it.acc.width,
+                nextMap: it.acc.nextMap
+            }) in
+            { colMap:  Map.insert(it.acc.colMap, col, count),
+              rowStr:  it.acc.rowStr,
+              width:   it.acc.width,
+              nextMap: it.acc.nextMap }
+
+        rowBFS :: Pure { queue: List<Int>, visited: Set<Int>, outputs: Set<Int>, exits: Int, rowStr: String, width: Int, nextMap: Map<Int,Int> } -> Int =>
+            match List.isEmpty(it.queue) {
+                true  ->
+                    let outputList = Set.toList(it.outputs) in
+                    List.fold(outputList, { total: it.exits, nextMap: it.nextMap }, sumNextRow).total
+                false ->
+                    let c    = Maybe.getOr(List.head(it.queue), 0) in
+                    let rest = List.tail(it.queue) in
+                    match Set.contains(it.visited, c) {
+                        true  -> rowBFS({ queue: rest, visited: it.visited, outputs: it.outputs, exits: it.exits, rowStr: it.rowStr, width: it.width, nextMap: it.nextMap })
+                        false ->
+                            let vis2 = Set.insert(it.visited, c) in
+                            match c < 0 {
+                                true  -> rowBFS({ queue: rest, visited: vis2, outputs: it.outputs, exits: it.exits + 1, rowStr: it.rowStr, width: it.width, nextMap: it.nextMap })
+                                false ->
+                                    match c >= it.width {
+                                        true  -> rowBFS({ queue: rest, visited: vis2, outputs: it.outputs, exits: it.exits + 1, rowStr: it.rowStr, width: it.width, nextMap: it.nextMap })
+                                        false ->
+                                            let ch = String.slice(it.rowStr, c, c + 1) in
+                                            match ch == "^" {
+                                                true  ->
+                                                    let q2 = List.append(List.append(rest, c - 1), c + 1) in
+                                                    rowBFS({ queue: q2, visited: vis2, outputs: it.outputs, exits: it.exits, rowStr: it.rowStr, width: it.width, nextMap: it.nextMap })
+                                                false ->
+                                                    rowBFS({ queue: rest, visited: vis2, outputs: Set.insert(it.outputs, c), exits: it.exits, rowStr: it.rowStr, width: it.width, nextMap: it.nextMap })
+                                            }
+                                    }
+                            }
+                    }
+            }
+
+        sumNextRow :: Pure { acc: { total: Int, nextMap: Map<Int,Int> }, item: Int } -> { total: Int, nextMap: Map<Int,Int> } =>
+            { total: it.acc.total + Maybe.getOr(Map.get(it.acc.nextMap, it.item), 1), nextMap: it.acc.nextMap }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_7a/input.txt") -> 221371496188107
+    }
+}

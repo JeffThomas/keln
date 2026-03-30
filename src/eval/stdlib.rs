@@ -49,6 +49,8 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.sequence"
             | "List.repeat"
             | "List.clone"
+            | "List.sort"
+            | "List.combinations2"
             | "Int.parse"
             | "Int.toString"
             | "Int.abs"
@@ -612,6 +614,44 @@ pub fn dispatch(
         "List.clone" => {
             let v = one(args, "List.clone")?;
             Ok(v)
+        }
+        "List.sort" => {
+            let v = one(args, "List.sort")?;
+            match v {
+                Value::List(mut items) => {
+                    items.sort();
+                    Ok(Value::List(items))
+                }
+                _ => Err(RuntimeError::new("List.sort: expected List")),
+            }
+        }
+
+        // List.combinations2: generates all unordered pairs {fst, i, j, snd}
+        // from a list in a single native Rust loop — no VM overhead, no
+        // O(N^2) accumulator cloning.  Returns List<{fst:A, i:Int, j:Int, snd:A}>.
+        "List.combinations2" => {
+            let v = one(args, "List.combinations2")?;
+            match v {
+                Value::List(items) => {
+                    let n = items.len();
+                    let mut result = Vec::with_capacity(n * n.saturating_sub(1) / 2);
+                    for i in 0..n {
+                        for j in (i + 1)..n {
+                            // Fields must be in alphabetical order to match
+                            // how the parser/evaluator builds records.
+                            let rec = vec![
+                                ("fst".to_string(), items[i].clone()),
+                                ("i".to_string(),   Value::Int(i as i64)),
+                                ("j".to_string(),   Value::Int(j as i64)),
+                                ("snd".to_string(), items[j].clone()),
+                            ];
+                            result.push(Value::Record(rec));
+                        }
+                    }
+                    Ok(Value::List(result))
+                }
+                _ => Err(RuntimeError::new("List.combinations2: expected List")),
+            }
         }
 
         // =====================================================================

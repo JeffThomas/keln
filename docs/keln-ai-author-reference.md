@@ -330,19 +330,39 @@ Note: `Maybe.none(Unit)` — pass `Unit` explicitly.
 
 ### List
 ```keln
-List.map        { List<T>, FunctionRef<E,T,U>          -> List<U>          | E }
-List.filter     { List<T>, FunctionRef<E,T,Bool>       -> List<T>          | E }
-List.fold       { List<T>, U, FunctionRef<E,{U,T},U>   -> U                | E }
-List.find       { List<T>, FunctionRef<E,T,Bool>       -> Maybe<T>         | E }
-List.sequence   { Pure List<Result<T,E>>               -> Result<List<T>,E>    }
-List.head       { Pure List<T>                         -> Maybe<T>             }
-List.tail       { Pure List<T>                         -> List<T>              }
-List.isEmpty    { Pure List<T>                         -> Bool                 }
-List.length     { Pure List<T>                         -> Int                  }
-List.range      { Pure Int, Int                        -> List<Int>            }
-List.repeat     { Pure T, Int where >= 0               -> List<T>              }
-List.clone      { Pure List<T> where T: Cloneable      -> List<T>              }
+List.map          { List<T>, FunctionRef<E,T,U>          -> List<U>          | E }
+List.filter       { List<T>, FunctionRef<E,T,Bool>       -> List<T>          | E }
+List.fold         { List<T>, U, FunctionRef<E,{U,T},U>   -> U                | E }
+List.find         { List<T>, FunctionRef<E,T,Bool>       -> Maybe<T>         | E }
+List.sequence     { Pure List<Result<T,E>>               -> Result<List<T>,E>    }
+List.head         { Pure List<T>                         -> Maybe<T>             }
+List.tail         { Pure List<T>                         -> List<T>              }
+List.isEmpty      { Pure List<T>                         -> Bool                 }
+List.len          { Pure List<T>                         -> Int                  }
+List.length       { Pure List<T>                         -> Int                  }
+List.range        { Pure Int, Int                        -> List<Int>            }
+List.repeat       { Pure T, Int where >= 0               -> List<T>              }
+List.clone        { Pure List<T> where T: Cloneable      -> List<T>              }
+List.append       { Pure List<T>, T                      -> List<T>              }
+List.prepend      { Pure List<T>, T                      -> List<T>              }
+List.concat       { Pure List<T>, List<T>                -> List<T>              }
+List.reverse      { Pure List<T>                         -> List<T>              }
+List.take         { Pure List<T>, Int                    -> List<T>              }
+List.drop         { Pure List<T>, Int                    -> List<T>              }
+List.contains     { Pure List<T>, T                      -> Bool                 }
+List.zip          { Pure List<T>, List<U>                -> List<{fst:T,snd:U}>  }
+List.flatten      { Pure List<List<T>>                   -> List<T>              }
+List.sort         { Pure List<T> where T: Ord            -> List<T>              }
+List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:Int,snd:T}> }
 ```
+
+**`List.tail` returns `List<T>` directly — NOT `Maybe<List<T>>`.** Do not wrap it in `Maybe.getOr`.
+
+**`List.prepend(list, item)`** — first arg is the list; item goes to the front.
+
+**`List.sort` ordering for records:** records sort by field name alphabetically, then by value. A record `{ dist: Int, i: Int, j: Int }` sorts by `dist` first (d < i < j). Use this to sort-by-key without a comparator function.
+
+**`List.combinations2`** returns all unordered pairs from a list as `{fst: T, i: Int, j: Int, snd: T}` records, where `i < j` are the original indices. The pairs are generated natively in Rust — use this instead of a nested fold when you need all pairs (see performance pitfall below).
 
 ### Map
 ```keln
@@ -358,6 +378,20 @@ Map.fromList    { Pure List<{key:K,val:V}>             -> Map<K,V>             }
 Map.size        { Pure Map<K,V>                        -> Int                  }
 Map.merge       { Pure Map<K,V>, Map<K,V>              -> Map<K,V>             }
 ```
+
+**`Map.empty` and `Set.empty` FnRef pitfall:** These zero-arg builtins are treated
+as `FunctionRef` values when referenced without being called. Do NOT use them in
+argument position or record literals directly. Always use the list constructor instead:
+```keln
+-- WRONG:
+let m = Map.empty in          -- may bind a FnRef, not an empty Map
+{ myMap: Map.empty }          -- may store FnRef in the record field
+
+-- RIGHT:
+let m = Map.fromList([]) in   -- empty Map, always correct
+{ myMap: Map.fromList([]) }
+```
+The same applies to `Set.empty` — use `Set.fromList([])` instead.
 
 ### Set
 ```keln
@@ -647,7 +681,45 @@ out: input
 
 ---
 
-## 15. Common Mistakes — Do Not Do These
+## 15. Performance Pitfalls
+
+### Fold with a growing List accumulator — O(N²) trap
+
+Every fold step **clones the entire accumulator**. If your accumulator contains
+a growing list, each step clones a list that is 1 element longer than the last.
+For N items this is O(N²) total work and will be impractically slow for N > a
+few hundred.
+
+```keln
+-- WRONG — pairs list in acc is cloned ~500k times; O(N^2):
+List.fold(pts, { pairs: [], ... }, addOnePair)
+
+-- RIGHT — generate pairs natively, then transform with List.map (no accumulator growth):
+let rawPairs = List.combinations2(pts) in   -- Rust loop, no VM overhead
+let dists    = List.map(rawPairs, computeDist) in
+```
+
+**Rule:** Never put a list into a fold accumulator if that list grows on every step
+and the total number of elements produced is large (> ~1000). Use a native
+combinator (`List.map`, `List.filter`, `List.combinations2`) that builds the
+result in Rust, then process it in a second pass.
+
+### Adding new stdlib builtins
+
+New functions must be registered in **two places** or the runtime will call a
+function named `""` (empty string):
+
+1. `src/vm/ir.rs` — append the name to `BUILTIN_NAMES` (the static array near the
+   bottom). This gives the function a compile-time index.
+2. `src/eval/stdlib.rs` — add the name to the known-names match arm at the top
+   of `dispatch`, and add the implementation match arm in the body.
+
+Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
+`""` at runtime and fails with `"unknown stdlib function ''"`.
+
+---
+
+## 16. Common Mistakes — Do Not Do These
 
 | Wrong | Right | Why |
 |---|---|---|
@@ -663,10 +735,15 @@ out: input
 | `Float.approxEq` outside forall | `==` in normal code, `Float.approxEq` in forall | IEEE 754 NaN handling |
 | Multi-file programs | Single file only | Registry (Phase 5) handles library reuse |
 | Implicit clone | Explicit `clone()` | No hidden copies |
+| `Map.empty` or `Set.empty` in arg/record position | `Map.fromList([])` / `Set.fromList([])` | Zero-arg builtins bind as FnRef, not value |
+| Growing list in fold accumulator (large N) | `List.combinations2` + `List.map` | O(N²) accumulator cloning |
+| `Maybe.getOr(List.tail(xs), [])` | `List.tail(xs)` directly | `List.tail` returns `List<T>`, not `Maybe<List<T>>` |
+| `List.prepend(item, list)` | `List.prepend(list, item)` | First arg is the list; item goes to front |
+| `let x = "out" in ...` | Use a different name | `out`, `in`, `verify` are reserved keywords |
 
 ---
 
-## 16. Confidence and Provenance (Required Fields)
+## 17. Confidence and Provenance (Required Fields)
 
 Every function must have `confidence:` and `reason:`. These are structured
 data used by the verification and learning system.
@@ -691,7 +768,7 @@ provenance: {
 
 ---
 
-## 17. VerificationResult — Reading the Output
+## 18. VerificationResult — Reading the Output
 
 `keln verify <file>` emits JSON. Key fields:
 
