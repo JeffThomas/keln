@@ -445,10 +445,10 @@ fn countAll {
             Value::Str("a".into()), Value::Str("c".into()),
             Value::Str("a".into()),
         ]);
-        let input = rec(vec![("counts", Value::Map(vec![])), ("items", items)]);
+        let input = rec(vec![("counts", Value::Map(std::collections::BTreeMap::new())), ("items", items)]);
         let result = eval_fn(src, "countAll", input).unwrap();
         if let Value::Map(entries) = &result {
-            let get = |k: &str| entries.iter().find(|(key, _)| key == &Value::Str(k.into())).map(|(_, v)| v.clone());
+            let get = |k: &str| entries.get(&Value::Str(k.into())).cloned();
             assert_eq!(get("a"), Some(Value::Int(3)));
             assert_eq!(get("b"), Some(Value::Int(1)));
             assert_eq!(get("c"), Some(Value::Int(1)));
