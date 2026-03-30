@@ -531,42 +531,43 @@ impl Parser {
         self.expect_symbol(":")?;
         let out_clause = self.parse_expr()?;
 
-        let confidence = if self.check_keyword("confidence") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            Some(self.parse_confidence()?)
-        } else { None };
+        let mut confidence = None;
+        let mut reason = None;
+        let mut proves = None;
+        let mut provenance = None;
+        let mut verify = None;
+        let mut helpers = None;
 
-        let reason = if self.check_keyword("reason") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            let (s, _) = self.expect_string_literal()?;
-            Some(s)
-        } else { None };
-
-        let proves = if self.check_keyword("proves") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            Some(self.parse_proves_block()?)
-        } else { None };
-
-        let provenance = if self.check_keyword("provenance") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            Some(self.parse_provenance_block()?)
-        } else { None };
-
-        let verify = if self.check_keyword("verify") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            Some(self.parse_verify_block()?)
-        } else { None };
-
-        let helpers = if self.check_keyword("helpers") {
-            self.advance()?;
-            self.expect_symbol(":")?;
-            Some(self.parse_helpers_block()?)
-        } else { None };
+        loop {
+            if self.check_keyword("confidence") && confidence.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                confidence = Some(self.parse_confidence()?);
+            } else if self.check_keyword("reason") && reason.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                let (s, _) = self.expect_string_literal()?;
+                reason = Some(s);
+            } else if self.check_keyword("proves") && proves.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                proves = Some(self.parse_proves_block()?);
+            } else if self.check_keyword("provenance") && provenance.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                provenance = Some(self.parse_provenance_block()?);
+            } else if self.check_keyword("verify") && verify.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                verify = Some(self.parse_verify_block()?);
+            } else if self.check_keyword("helpers") && helpers.is_none() {
+                self.advance()?;
+                self.expect_symbol(":")?;
+                helpers = Some(self.parse_helpers_block()?);
+            } else {
+                break;
+            }
+        }
 
         self.expect_symbol("}")?;
 

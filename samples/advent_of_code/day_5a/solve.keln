@@ -1,0 +1,89 @@
+-- AoC Day 5a: Cafeteria Part Two
+--
+-- Count all unique ingredient IDs covered by any fresh range.
+-- Ignore the IDs section; only the ranges matter.
+--
+-- Strategy: insertion-sort ranges by lo, merge overlapping/adjacent
+-- ranges in a single fold pass, then sum (hi - lo + 1) per merged range.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines  = File.readLines(path) in
+        let sep    = findSep(lines) in
+        let ranges = List.map(List.take(lines, sep), parseRange) in
+        let sorted = sortByLo(ranges) in
+        let merged = mergeRanges(sorted) in
+        sumSizes(merged)
+
+    helpers: {
+        findSep :: Pure List<String> -> Int =>
+            List.fold(
+                List.range(0, List.length(it)),
+                { found: 0, lines: it },
+                findSepStep
+            ).found
+
+        findSepStep :: Pure { acc: { found: Int, lines: List<String> }, item: Int } -> { found: Int, lines: List<String> } =>
+            let line = String.trim(Maybe.getOr(List.head(List.drop(it.acc.lines, it.item)), "x")) in
+            match String.len(line) == 0 {
+                true  -> { found: it.item, lines: it.acc.lines }
+                false -> it.acc
+            }
+
+        parseRange :: Pure String -> { lo: Int, hi: Int } =>
+            let parts = String.split(String.trim(it), "-") in
+            let lo    = Result.unwrap(Int.parse(Maybe.getOr(List.head(parts), "0"))) in
+            let hi    = Result.unwrap(Int.parse(Maybe.getOr(List.head(List.drop(parts, 1)), "0"))) in
+            { lo: lo, hi: hi }
+
+        sortByLo :: Pure List<{ lo: Int, hi: Int }> -> List<{ lo: Int, hi: Int }> =>
+            List.fold(it, [], insertSortedStep)
+
+        insertSortedStep :: Pure { acc: List<{ lo: Int, hi: Int }>, item: { lo: Int, hi: Int } } -> List<{ lo: Int, hi: Int }> =>
+            insertSorted({ sorted: it.acc, item: it.item })
+
+        insertSorted :: Pure { sorted: List<{ lo: Int, hi: Int }>, item: { lo: Int, hi: Int } } -> List<{ lo: Int, hi: Int }> =>
+            match List.isEmpty(it.sorted) {
+                true  -> [it.item]
+                false ->
+                    let hd = Maybe.getOr(List.head(it.sorted), it.item) in
+                    let tl = List.tail(it.sorted) in
+                    match it.item.lo <= hd.lo {
+                        true  -> List.prepend(it.sorted, it.item)
+                        false -> List.prepend(insertSorted({ sorted: tl, item: it.item }), hd)
+                    }
+            }
+
+        mergeRanges :: Pure List<{ lo: Int, hi: Int }> -> List<{ lo: Int, hi: Int }> =>
+            List.fold(it, [], mergeOne)
+
+        mergeOne :: Pure { acc: List<{ lo: Int, hi: Int }>, item: { lo: Int, hi: Int } } -> List<{ lo: Int, hi: Int }> =>
+            match List.isEmpty(it.acc) {
+                true  -> [it.item]
+                false ->
+                    let rev  = List.reverse(it.acc) in
+                    let last = Maybe.getOr(List.head(rev), it.item) in
+                    let rest = List.reverse(List.tail(rev)) in
+                    match last.hi >= it.item.lo - 1 {
+                        true  ->
+                            let newHi = match last.hi >= it.item.hi { true -> last.hi  false -> it.item.hi } in
+                            List.append(rest, { lo: last.lo, hi: newHi })
+                        false ->
+                            List.append(it.acc, it.item)
+                    }
+            }
+
+        sumSizes :: Pure List<{ lo: Int, hi: Int }> -> Int =>
+            List.fold(it, 0, addSize)
+
+        addSize :: Pure { acc: Int, item: { lo: Int, hi: Int } } -> Int =>
+            it.acc + it.item.hi - it.item.lo + 1
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_5a/input.txt") -> 350513176552950
+    }
+}

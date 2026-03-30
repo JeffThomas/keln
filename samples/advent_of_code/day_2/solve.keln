@@ -1,0 +1,70 @@
+-- AoC Day 2: Gift Shop
+--
+-- Find all "doubled" IDs within given ranges — numbers whose decimal
+-- representation is some sequence of digits repeated exactly twice
+-- (e.g. 11, 1010, 446446). Sum them all.
+--
+-- Key insight: doubled numbers of length 2k have the form base*(10^k+1)
+-- for base in [10^(k-1), 10^k-1]. For a range [lo, hi], find the valid
+-- base interval and use the triangle-sum formula — no need to iterate
+-- every number in the range.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: List.fold(
+        List.filter(
+            String.split(String.trim(File.read(path)), ","),
+            notEmpty
+        ),
+        0,
+        processRange
+    )
+
+    helpers: {
+        notEmpty :: Pure String -> Bool =>
+            String.len(it) > 0
+
+        processRange :: Pure { acc: Int, item: String } -> Int =>
+            let dashIdx = Maybe.getOr(String.indexOf(it.item, "-"), 0) in
+            let lo      = Result.unwrap(Int.parse(String.slice(it.item, 0, dashIdx))) in
+            let hi      = Result.unwrap(Int.parse(String.slice(it.item, dashIdx + 1, String.len(it.item)))) in
+            it.acc + rangeSum({ lo: lo, hi: hi })
+
+        -- Sum all doubled numbers in [lo, hi] across all even digit lengths.
+        rangeSum :: Pure { lo: Int, hi: Int } -> Int =>
+            List.fold(
+                List.range(1, 7),
+                { total: 0, lo: it.lo, hi: it.hi },
+                addK
+            ).total
+
+        -- Contribute the doubled numbers of digit-length 2k within the range.
+        addK :: Pure { acc: { total: Int, lo: Int, hi: Int }, item: Int } -> { total: Int, lo: Int, hi: Int } =>
+            let k       = it.item in
+            let mult    = Int.pow(10, k) + 1 in
+            let baseLo  = Int.pow(10, k - 1) in
+            let baseHi  = Int.pow(10, k) - 1 in
+            let vLo     = max2({ a: divCeil({ a: it.acc.lo, b: mult }), b: baseLo }) in
+            let vHi     = min2({ a: it.acc.hi / mult, b: baseHi }) in
+            let contrib = match vLo > vHi {
+                true  -> 0
+                false -> mult * ((vHi - vLo + 1) * (vLo + vHi) / 2)
+            } in
+            { total: it.acc.total + contrib, lo: it.acc.lo, hi: it.acc.hi }
+
+        divCeil :: Pure { a: Int, b: Int } -> Int =>
+            (it.a + it.b - 1) / it.b
+
+        max2 :: Pure { a: Int, b: Int } -> Int =>
+            match it.a > it.b { true -> it.a   false -> it.b }
+
+        min2 :: Pure { a: Int, b: Int } -> Int =>
+            match it.a < it.b { true -> it.a   false -> it.b }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_2/input.txt") -> 41294979841
+    }
+}

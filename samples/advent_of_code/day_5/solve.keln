@@ -1,0 +1,82 @@
+-- AoC Day 5: Cafeteria
+--
+-- Count how many ingredient IDs fall within at least one fresh range.
+-- Input: lo-hi range pairs, blank line, then one ID per line.
+--
+-- findSep: fold over line indices to find the blank separator line.
+-- isFresh: fold over all ranges, short-circuit on first match.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines  = File.readLines(path) in
+        let sep    = findSep(lines) in
+        let ranges = List.map(List.take(lines, sep), parseRange) in
+        let ids    = List.map(List.drop(lines, sep + 1), parseId) in
+        countFresh({ ids: ids, ranges: ranges })
+
+    helpers: {
+        findSep :: Pure List<String> -> Int =>
+            List.fold(
+                List.range(0, List.length(it)),
+                { found: 0, lines: it },
+                findSepStep
+            ).found
+
+        findSepStep :: Pure { acc: { found: Int, lines: List<String> }, item: Int } -> { found: Int, lines: List<String> } =>
+            let line = String.trim(Maybe.getOr(List.head(List.drop(it.acc.lines, it.item)), "x")) in
+            match String.len(line) == 0 {
+                true  -> { found: it.item, lines: it.acc.lines }
+                false -> it.acc
+            }
+
+        parseRange :: Pure String -> { lo: Int, hi: Int } =>
+            let parts = String.split(String.trim(it), "-") in
+            let lo    = Result.unwrap(Int.parse(Maybe.getOr(List.head(parts), "0"))) in
+            let hi    = Result.unwrap(Int.parse(Maybe.getOr(List.head(List.drop(parts, 1)), "0"))) in
+            { lo: lo, hi: hi }
+
+        parseId :: Pure String -> Int =>
+            Result.unwrap(Int.parse(String.trim(it)))
+
+        countFresh :: Pure { ids: List<Int>, ranges: List<{ lo: Int, hi: Int }> } -> Int =>
+            List.fold(
+                it.ids,
+                { count: 0, ranges: it.ranges },
+                checkId
+            ).count
+
+        checkId :: Pure { acc: { count: Int, ranges: List<{ lo: Int, hi: Int }> }, item: Int } -> { count: Int, ranges: List<{ lo: Int, hi: Int }> } =>
+            let fresh = isFresh({ id: it.item, ranges: it.acc.ranges }) in
+            match fresh {
+                true  -> { count: it.acc.count + 1, ranges: it.acc.ranges }
+                false -> it.acc
+            }
+
+        isFresh :: Pure { id: Int, ranges: List<{ lo: Int, hi: Int }> } -> Bool =>
+            List.fold(
+                it.ranges,
+                { found: false, id: it.id },
+                checkRange
+            ).found
+
+        checkRange :: Pure { acc: { found: Bool, id: Int }, item: { lo: Int, hi: Int } } -> { found: Bool, id: Int } =>
+            match it.acc.found {
+                true  -> it.acc
+                false ->
+                    match it.item.lo <= it.acc.id {
+                        false -> it.acc
+                        true  -> match it.acc.id <= it.item.hi {
+                            true  -> { found: true, id: it.acc.id }
+                            false -> it.acc
+                        }
+                    }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_5/input.txt") -> 577
+    }
+}

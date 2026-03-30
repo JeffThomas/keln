@@ -151,7 +151,9 @@ impl KelnServer {
         let program = match crate::parser::parse(&source) {
             Ok(p) => p,
             Err(e) => {
-                let result = serde_json::json!({ "error": format!("parse error: {}", e) });
+                let result = serde_json::json!({
+                    "error": { "kind": "parse", "message": format!("{}", e) }
+                });
                 return Ok(CallToolResult::success(vec![Content::text(
                     result.to_string(),
                 )]));
@@ -162,7 +164,9 @@ impl KelnServer {
         let module = match crate::vm::lower::lower_program(&program) {
             Ok(m) => m,
             Err(e) => {
-                let result = serde_json::json!({ "error": format!("lower error: {}", e) });
+                let result = serde_json::json!({
+                    "error": { "kind": "lower", "message": e }
+                });
                 return Ok(CallToolResult::success(vec![Content::text(
                     result.to_string(),
                 )]));
@@ -184,7 +188,13 @@ impl KelnServer {
                 )]))
             }
             Err(e) => {
-                let result = serde_json::json!({ "error": format!("{}", e) });
+                let result = serde_json::json!({
+                    "error": {
+                        "kind": "runtime",
+                        "message": e.message,
+                        "stack_trace": e.stack_trace
+                    }
+                });
                 Ok(CallToolResult::success(vec![Content::text(
                     result.to_string(),
                 )]))

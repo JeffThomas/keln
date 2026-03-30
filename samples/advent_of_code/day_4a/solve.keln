@@ -1,0 +1,139 @@
+-- AoC Day 4a: Printing Department Part Two
+--
+-- Iteratively remove all accessible '@' cells (< 4 '@' neighbours)
+-- until no more can be removed. Count total removed across all rounds.
+--
+-- simulate: tail-recursive loop — find removable, apply, repeat.
+-- applyRemovals: rebuilds each row character by character, replacing
+-- removed positions with '.'.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: simulate({ grid: File.readLines(path), total: 0 })
+
+    helpers: {
+        simulate :: Pure { grid: List<String>, total: Int } -> Int =>
+            let removals = findRemovable(it.grid) in
+            let count    = List.length(removals) in
+            match count == 0 {
+                true  -> it.total
+                false -> simulate({ grid: applyRemovals({ grid: it.grid, removals: removals }), total: it.total + count })
+            }
+
+        findRemovable :: Pure List<String> -> List<{ r: Int, c: Int }> =>
+            List.fold(
+                List.range(0, List.length(it)),
+                { acc: [], grid: it },
+                collectRow
+            ).acc
+
+        collectRow :: Pure { acc: { acc: List<{ r: Int, c: Int }>, grid: List<String> }, item: Int } -> { acc: List<{ r: Int, c: Int }>, grid: List<String> } =>
+            let row  = it.item in
+            let line = getLine({ grid: it.acc.grid, r: row }) in
+            let cols = String.len(line) in
+            List.fold(
+                List.range(0, cols),
+                { acc: it.acc.acc, grid: it.acc.grid, row: row },
+                collectCell
+            )
+
+        collectCell :: Pure { acc: { acc: List<{ r: Int, c: Int }>, grid: List<String>, row: Int }, item: Int } -> { acc: List<{ r: Int, c: Int }>, grid: List<String>, row: Int } =>
+            let ch = getCell({ grid: it.acc.grid, r: it.acc.row, c: it.item }) in
+            match ch == "@" {
+                false -> it.acc
+                true  ->
+                    let n = countNeighbors({ grid: it.acc.grid, row: it.acc.row, col: it.item }) in
+                    match n < 4 {
+                        true  -> { acc: List.append(it.acc.acc, { r: it.acc.row, c: it.item }), grid: it.acc.grid, row: it.acc.row }
+                        false -> it.acc
+                    }
+            }
+
+        applyRemovals :: Pure { grid: List<String>, removals: List<{ r: Int, c: Int }> } -> List<String> =>
+            List.fold(
+                List.range(0, List.length(it.grid)),
+                { result: [], grid: it.grid, removals: it.removals },
+                updateRow
+            ).result
+
+        updateRow :: Pure { acc: { result: List<String>, grid: List<String>, removals: List<{ r: Int, c: Int }> }, item: Int } -> { result: List<String>, grid: List<String>, removals: List<{ r: Int, c: Int }> } =>
+            let row  = it.item in
+            let line = getLine({ grid: it.acc.grid, r: row }) in
+            let cols = String.len(line) in
+            let newLine = List.fold(
+                List.range(0, cols),
+                { chars: "", row: row, line: line, removals: it.acc.removals },
+                updateChar
+            ).chars in
+            { result: List.append(it.acc.result, newLine), grid: it.acc.grid, removals: it.acc.removals }
+
+        updateChar :: Pure { acc: { chars: String, row: Int, line: String, removals: List<{ r: Int, c: Int }> }, item: Int } -> { chars: String, row: Int, line: String, removals: List<{ r: Int, c: Int }> } =>
+            let ch  = String.slice(it.acc.line, it.item, it.item + 1) in
+            let rem = isRemoved({ r: it.acc.row, c: it.item, removals: it.acc.removals }) in
+            let rep = match rem { true -> "."  false -> ch } in
+            { chars: String.concat(it.acc.chars, rep), row: it.acc.row, line: it.acc.line, removals: it.acc.removals }
+
+        isRemoved :: Pure { r: Int, c: Int, removals: List<{ r: Int, c: Int }> } -> Bool =>
+            List.fold(
+                it.removals,
+                { found: false, r: it.r, c: it.c },
+                checkRemoval
+            ).found
+
+        checkRemoval :: Pure { acc: { found: Bool, r: Int, c: Int }, item: { r: Int, c: Int } } -> { found: Bool, r: Int, c: Int } =>
+            match it.acc.found {
+                true  -> it.acc
+                false ->
+                    match it.item.r == it.acc.r {
+                        false -> it.acc
+                        true  -> match it.item.c == it.acc.c {
+                            false -> it.acc
+                            true  -> { found: true, r: it.acc.r, c: it.acc.c }
+                        }
+                    }
+            }
+
+        countNeighbors :: Pure { grid: List<String>, row: Int, col: Int } -> Int =>
+            List.fold(
+                [
+                    { dr: -1, dc: -1 }, { dr: -1, dc: 0 }, { dr: -1, dc: 1 },
+                    { dr:  0, dc: -1 },                     { dr:  0, dc: 1 },
+                    { dr:  1, dc: -1 }, { dr:  1, dc: 0 }, { dr:  1, dc: 1 }
+                ],
+                { n: 0, grid: it.grid, row: it.row, col: it.col },
+                checkNeighbor
+            ).n
+
+        checkNeighbor :: Pure { acc: { n: Int, grid: List<String>, row: Int, col: Int }, item: { dr: Int, dc: Int } } -> { n: Int, grid: List<String>, row: Int, col: Int } =>
+            let ch = getCell({ grid: it.acc.grid, r: it.acc.row + it.item.dr, c: it.acc.col + it.item.dc }) in
+            match ch == "@" {
+                true  -> { n: it.acc.n + 1, grid: it.acc.grid, row: it.acc.row, col: it.acc.col }
+                false -> it.acc
+            }
+
+        getLine :: Pure { grid: List<String>, r: Int } -> String =>
+            match it.r < 0 {
+                true  -> ""
+                false -> Maybe.getOr(List.head(List.drop(it.grid, it.r)), "")
+            }
+
+        getCell :: Pure { grid: List<String>, r: Int, c: Int } -> String =>
+            let line = getLine({ grid: it.grid, r: it.r }) in
+            match String.len(line) == 0 {
+                true  -> "."
+                false -> match it.c < 0 {
+                    true  -> "."
+                    false -> match it.c >= String.len(line) {
+                        true  -> "."
+                        false -> String.slice(line, it.c, it.c + 1)
+                    }
+                }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_4a/input.txt") -> 8765
+    }
+}

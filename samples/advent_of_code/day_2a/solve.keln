@@ -1,0 +1,110 @@
+-- AoC Day 2a: Gift Shop Part Two
+--
+-- An ID is invalid if its decimal representation is some sequence of digits
+-- repeated at least twice (e.g. 111=1×3, 565656=56×3, 2121212121=21×5).
+--
+-- For length L, repeated numbers with period d have the form base×M where
+-- M = (10^L - 1)/(10^d - 1). The sum of all invalid numbers of length L is:
+--
+--   Σ_{d | L, d < L}  −μ(L/d) × triangleSum(valid bases)
+--
+-- where μ is the Möbius function. This handles inclusion-exclusion correctly:
+-- numbers with multiple periods (e.g. 111111 has period 1, 2, and 3) are
+-- counted exactly once thanks to the Möbius coefficients.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: List.fold(
+        List.filter(
+            String.split(String.trim(File.read(path)), ","),
+            notEmpty
+        ),
+        0,
+        processRange
+    )
+
+    helpers: {
+        notEmpty :: Pure String -> Bool =>
+            String.len(it) > 0
+
+        processRange :: Pure { acc: Int, item: String } -> Int =>
+            let dashIdx = Maybe.getOr(String.indexOf(it.item, "-"), 0) in
+            let lo      = Result.unwrap(Int.parse(String.slice(it.item, 0, dashIdx))) in
+            let hi      = Result.unwrap(Int.parse(String.slice(it.item, dashIdx + 1, String.len(it.item)))) in
+            it.acc + rangeSum({ lo: lo, hi: hi })
+
+        -- Sum invalid IDs across all relevant lengths
+        rangeSum :: Pure { lo: Int, hi: Int } -> Int =>
+            List.fold(
+                List.range(2, 11),
+                { total: 0, lo: it.lo, hi: it.hi },
+                addLength
+            ).total
+
+        -- Contribute invalid IDs of digit-length `len` within the range
+        addLength :: Pure { acc: { total: Int, lo: Int, hi: Int }, item: Int } -> { total: Int, lo: Int, hi: Int } =>
+            let len  = it.item in
+            let elo  = max2({ a: it.acc.lo, b: Int.pow(10, len - 1) }) in
+            let ehi  = min2({ a: it.acc.hi, b: Int.pow(10, len) - 1 }) in
+            let contrib = match elo > ehi {
+                true  -> 0
+                false -> lengthSum({ len: len, lo: elo, hi: ehi })
+            } in
+            { total: it.acc.total + contrib, lo: it.acc.lo, hi: it.acc.hi }
+
+        -- Sum invalid IDs of exactly `len` digits in [lo, hi] using Möbius IE
+        lengthSum :: Pure { len: Int, lo: Int, hi: Int } -> Int =>
+            List.fold(
+                List.range(1, it.len),
+                { total: 0, len: it.len, lo: it.lo, hi: it.hi },
+                addDivisor
+            ).total
+
+        -- For candidate period d, add −μ(len/d) × triangleSum contribution
+        addDivisor :: Pure { acc: { total: Int, len: Int, lo: Int, hi: Int }, item: Int } -> { total: Int, len: Int, lo: Int, hi: Int } =>
+            let d     = it.item in
+            let q     = it.acc.len / d in
+            let valid = match it.acc.len % d == 0 { true -> match q >= 2 { true -> 1  false -> 0 }  false -> 0 } in
+            match valid == 0 {
+                true  -> it.acc
+                false ->
+                    let coeff = negMobius(q) in
+                    let m     = (Int.pow(10, it.acc.len) - 1) / (Int.pow(10, d) - 1) in
+                    let bLo   = max2({ a: divCeil({ a: it.acc.lo, b: m }), b: Int.pow(10, d - 1) }) in
+                    let bHi   = min2({ a: it.acc.hi / m, b: Int.pow(10, d) - 1 }) in
+                    let a     = match bLo > bHi {
+                        true  -> 0
+                        false -> m * ((bHi - bLo + 1) * (bLo + bHi) / 2)
+                    } in
+                    { total: it.acc.total + coeff * a, len: it.acc.len, lo: it.acc.lo, hi: it.acc.hi }
+            }
+
+        -- -μ(n): negated Möbius function for n = 2..10
+        -- μ(n) = 0 if n has a squared prime factor, else (-1)^(number of prime factors)
+        negMobius :: Pure Int -> Int =>
+            match it == 2  { true ->  1  false ->
+            match it == 3  { true ->  1  false ->
+            match it == 4  { true ->  0  false ->
+            match it == 5  { true ->  1  false ->
+            match it == 6  { true -> -1  false ->
+            match it == 7  { true ->  1  false ->
+            match it == 8  { true ->  0  false ->
+            match it == 9  { true ->  0  false ->
+            match it == 10 { true -> -1  false -> 0 } } } } } } } } }
+
+        divCeil :: Pure { a: Int, b: Int } -> Int =>
+            (it.a + it.b - 1) / it.b
+
+        max2 :: Pure { a: Int, b: Int } -> Int =>
+            match it.a > it.b { true -> it.a   false -> it.b }
+
+        min2 :: Pure { a: Int, b: Int } -> Int =>
+            match it.a < it.b { true -> it.a   false -> it.b }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_2a/input.txt") -> 66500947346
+    }
+}

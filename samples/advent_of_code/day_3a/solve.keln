@@ -1,0 +1,56 @@
+-- AoC Day 3a: Lobby Part Two
+--
+-- Pick exactly 12 digits (in order) from each bank to form the largest
+-- 12-digit number. Sum across all banks.
+--
+-- Greedy algorithm: at step j (1..12), scan only the first
+-- len(rest) - (12 - j) characters of the remaining string.
+-- This leaves exactly enough room to complete the remaining picks.
+-- Pick the maximum digit in that window, append it, advance past it.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: List.fold(File.readLines(path), 0, processBank)
+
+    helpers: {
+        processBank :: Pure { acc: Int, item: String } -> Int =>
+            it.acc + bankMax(it.item)
+
+        bankMax :: Pure String -> Int =>
+            let state = List.fold(
+                List.range(1, 13),
+                { result: "", rest: it },
+                pickNext
+            ) in
+            Result.unwrap(Int.parse(state.result))
+
+        -- At step j, scan only as far as needed to leave room for remaining picks
+        pickNext :: Pure { acc: { result: String, rest: String }, item: Int } -> { result: String, rest: String } =>
+            let scanLen = String.len(it.acc.rest) - (12 - it.item) in
+            let scanStr = String.slice(it.acc.rest, 0, scanLen) in
+            let best    = bestInScan(scanStr) in
+            let newRest = String.slice(it.acc.rest, best.pos + 1, String.len(it.acc.rest)) in
+            { result: String.concat(it.acc.result, best.ch), rest: newRest }
+
+        -- Find the max digit and its position in a string
+        bestInScan :: Pure String -> { ch: String, pos: Int } =>
+            List.fold(
+                String.chars(it),
+                { ch: "0", pos: 0, idx: 0 },
+                updateBest
+            )
+
+        updateBest :: Pure { acc: { ch: String, pos: Int, idx: Int }, item: String } -> { ch: String, pos: Int, idx: Int } =>
+            let better = Result.unwrap(Int.parse(it.item)) > Result.unwrap(Int.parse(it.acc.ch)) in
+            match better {
+                true  -> { ch: it.item, pos: it.acc.idx, idx: it.acc.idx + 1 }
+                false -> { ch: it.acc.ch, pos: it.acc.pos, idx: it.acc.idx + 1 }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_3a/input.txt") -> 170731717900423
+    }
+}

@@ -1,0 +1,50 @@
+-- AoC Day 3: Lobby
+--
+-- Each bank is a string of digits. Pick exactly 2 positions (order-preserving)
+-- to form the largest 2-digit number. Sum the maximums across all banks.
+--
+-- Strategy: for each digit as the potential tens place, find the max digit
+-- in the remaining suffix. Track the best score with a sliding suffix window.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out: List.fold(File.readLines(path), 0, processBank)
+
+    helpers: {
+        processBank :: Pure { acc: Int, item: String } -> Int =>
+            it.acc + bankMax(it.item)
+
+        bankMax :: Pure String -> Int =>
+            List.fold(
+                String.chars(it),
+                { best: 0, rest: it },
+                tryFirst
+            ).best
+
+        tryFirst :: Pure { acc: { best: Int, rest: String }, item: String } -> { best: Int, rest: String } =>
+            let newRest = String.slice(it.acc.rest, 1, String.len(it.acc.rest)) in
+            let d1      = Result.unwrap(Int.parse(it.item)) in
+            let suffMax = suffixMax(newRest) in
+            let score   = match String.len(newRest) == 0 {
+                true  -> 0
+                false -> d1 * 10 + suffMax
+            } in
+            { best: max2({ a: it.acc.best, b: score }), rest: newRest }
+
+        suffixMax :: Pure String -> Int =>
+            List.fold(String.chars(it), 0, maxDigit)
+
+        maxDigit :: Pure { acc: Int, item: String } -> Int =>
+            let d = Result.unwrap(Int.parse(it.item)) in
+            match d > it.acc { true -> d  false -> it.acc }
+
+        max2 :: Pure { a: Int, b: Int } -> Int =>
+            match it.a > it.b { true -> it.a  false -> it.b }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_3/input.txt") -> 17263
+    }
+}

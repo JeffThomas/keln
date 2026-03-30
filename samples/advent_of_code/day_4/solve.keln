@@ -1,0 +1,87 @@
+-- AoC Day 4: Printing Department
+--
+-- Count '@' cells in a grid that have fewer than 4 '@' neighbours
+-- (8-directional). A forklift can access a roll if fewer than 4
+-- adjacent rolls are blocking it.
+--
+-- Grid access: List.drop(grid, r) + List.head gives the r-th row.
+-- Out-of-bounds cells are treated as '.'.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let grid = File.readLines(path) in
+        let rows = List.length(grid) in
+        List.fold(
+            List.range(0, rows),
+            { count: 0, grid: grid },
+            processRow
+        ).count
+
+    helpers: {
+        processRow :: Pure { acc: { count: Int, grid: List<String> }, item: Int } -> { count: Int, grid: List<String> } =>
+            let line  = getLine({ grid: it.acc.grid, r: it.item }) in
+            let cols  = String.len(line) in
+            let inner = List.fold(
+                List.range(0, cols),
+                { count: it.acc.count, grid: it.acc.grid, row: it.item },
+                processCell
+            ) in
+            { count: inner.count, grid: it.acc.grid }
+
+        processCell :: Pure { acc: { count: Int, grid: List<String>, row: Int }, item: Int } -> { count: Int, grid: List<String>, row: Int } =>
+            let ch = getCell({ grid: it.acc.grid, r: it.acc.row, c: it.item }) in
+            match ch == "@" {
+                false -> it.acc
+                true  ->
+                    let n = countNeighbors({ grid: it.acc.grid, row: it.acc.row, col: it.item }) in
+                    match n < 4 {
+                        true  -> { count: it.acc.count + 1, grid: it.acc.grid, row: it.acc.row }
+                        false -> it.acc
+                    }
+            }
+
+        countNeighbors :: Pure { grid: List<String>, row: Int, col: Int } -> Int =>
+            List.fold(
+                [
+                    { dr: -1, dc: -1 }, { dr: -1, dc: 0 }, { dr: -1, dc: 1 },
+                    { dr:  0, dc: -1 },                     { dr:  0, dc: 1 },
+                    { dr:  1, dc: -1 }, { dr:  1, dc: 0 }, { dr:  1, dc: 1 }
+                ],
+                { n: 0, grid: it.grid, row: it.row, col: it.col },
+                checkNeighbor
+            ).n
+
+        checkNeighbor :: Pure { acc: { n: Int, grid: List<String>, row: Int, col: Int }, item: { dr: Int, dc: Int } } -> { n: Int, grid: List<String>, row: Int, col: Int } =>
+            let ch = getCell({ grid: it.acc.grid, r: it.acc.row + it.item.dr, c: it.acc.col + it.item.dc }) in
+            match ch == "@" {
+                true  -> { n: it.acc.n + 1, grid: it.acc.grid, row: it.acc.row, col: it.acc.col }
+                false -> it.acc
+            }
+
+        getLine :: Pure { grid: List<String>, r: Int } -> String =>
+            match it.r < 0 {
+                true  -> ""
+                false -> Maybe.getOr(List.head(List.drop(it.grid, it.r)), "")
+            }
+
+        getCell :: Pure { grid: List<String>, r: Int, c: Int } -> String =>
+            let line = getLine({ grid: it.grid, r: it.r }) in
+            match String.len(line) == 0 {
+                true  -> "."
+                false -> match it.c < 0 {
+                    true  -> "."
+                    false -> match it.c >= String.len(line) {
+                        true  -> "."
+                        false -> String.slice(line, it.c, it.c + 1)
+                    }
+                }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_4/input.txt") -> 1437
+    }
+}
