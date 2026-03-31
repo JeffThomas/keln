@@ -1,0 +1,123 @@
+-- AoC Day 9a: Movie Theater Part Two
+--
+-- Find the largest rectangle with red tile corners, where every tile
+-- inside is red or green (i.e. inside the filled rectilinear polygon).
+--
+-- For each pair of red tiles (x1,y1) and (x2,y2), the rectangle is valid iff:
+--   1. No vertical polygon edge has x strictly between x1 and x2
+--      and its y-range overlaps (y1, y2).
+--   2. No horizontal polygon edge has y strictly between y1 and y2
+--      and its x-range overlaps (x1, x2).
+--   3. The parity (ray cast from (x1,y1) corner cell) is odd → inside.
+-- Return max (|dx|+1)*(|dy|+1) over all valid pairs.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines    = File.readLines(path) in
+        let pts      = List.map(lines, parsePt) in
+        let first    = Maybe.getOr(List.head(pts), { x: 0, y: 0 }) in
+        let edgeAcc  = List.fold(List.tail(pts), { edges: [], prev: first }, addEdge) in
+        let lastEdge = { ax: edgeAcc.prev.x, ay: edgeAcc.prev.y, bx: first.x, by: first.y } in
+        let allEdges = List.append(edgeAcc.edges, lastEdge) in
+        let vEdges   = List.filter(allEdges, isVert) in
+        let hEdges   = List.filter(allEdges, isHoriz) in
+        let pairs    = List.combinations2(pts) in
+        let initAcc  = { maxArea: 0, vEdges: vEdges, hEdges: hEdges } in
+        List.fold(pairs, initAcc, checkPair).maxArea
+
+    helpers: {
+        parsePt :: Pure String -> { x: Int, y: Int } =>
+            let parts = String.split(it, ",") in
+            let xStr  = Maybe.getOr(List.head(parts), "0") in
+            let yStr  = Maybe.getOr(List.head(List.tail(parts)), "0") in
+            { x: Result.unwrapOr(Int.parse(xStr), 0),
+              y: Result.unwrapOr(Int.parse(yStr), 0) }
+
+        addEdge :: Pure { acc: { edges: List<{ ax: Int, ay: Int, bx: Int, by: Int }>, prev: { x: Int, y: Int } }, item: { x: Int, y: Int } } -> { edges: List<{ ax: Int, ay: Int, bx: Int, by: Int }>, prev: { x: Int, y: Int } } =>
+            let edge = { ax: it.acc.prev.x, ay: it.acc.prev.y, bx: it.item.x, by: it.item.y } in
+            { edges: List.append(it.acc.edges, edge), prev: it.item }
+
+        isVert :: Pure { ax: Int, ay: Int, bx: Int, by: Int } -> Bool =>
+            it.ax == it.bx
+
+        isHoriz :: Pure { ax: Int, ay: Int, bx: Int, by: Int } -> Bool =>
+            it.ay == it.by
+
+        -- Fold step: check if a vertical edge blocks the rectangle [x1,x2]x[y1,y2]
+        checkVEdge :: Pure { acc: { blocked: Bool, x1: Int, x2: Int, y1: Int, y2: Int }, item: { ax: Int, ay: Int, bx: Int, by: Int } } -> { blocked: Bool, x1: Int, x2: Int, y1: Int, y2: Int } =>
+            let xe  = it.item.ax in
+            let ye1 = Int.min(it.item.ay, it.item.by) in
+            let ye2 = Int.max(it.item.ay, it.item.by) in
+            let blk = Bool.and(Bool.and(it.acc.x1 < xe, xe < it.acc.x2),
+                               Bool.and(ye2 > it.acc.y1, ye1 < it.acc.y2)) in
+            { blocked: Bool.or(it.acc.blocked, blk),
+              x1: it.acc.x1, x2: it.acc.x2, y1: it.acc.y1, y2: it.acc.y2 }
+
+        -- Fold step: check if a horizontal edge blocks the rectangle
+        checkHEdge :: Pure { acc: { blocked: Bool, x1: Int, x2: Int, y1: Int, y2: Int }, item: { ax: Int, ay: Int, bx: Int, by: Int } } -> { blocked: Bool, x1: Int, x2: Int, y1: Int, y2: Int } =>
+            let ye  = it.item.ay in
+            let xe1 = Int.min(it.item.ax, it.item.bx) in
+            let xe2 = Int.max(it.item.ax, it.item.bx) in
+            let blk = Bool.and(Bool.and(it.acc.y1 < ye, ye < it.acc.y2),
+                               Bool.and(xe2 > it.acc.x1, xe1 < it.acc.x2)) in
+            { blocked: Bool.or(it.acc.blocked, blk),
+              x1: it.acc.x1, x2: it.acc.x2, y1: it.acc.y1, y2: it.acc.y2 }
+
+        -- Stop predicate for foldUntil: stop once blocked
+        isBlocked :: Pure { blocked: Bool, x1: Int, x2: Int, y1: Int, y2: Int } -> Bool =>
+            it.blocked
+
+        -- Fold step: count vertical edges contributing to parity at corner (x1,y1)
+        -- Edge contributes if: xe > x1 AND y_min <= y1 AND y_max > y1
+        countParity :: Pure { acc: { count: Int, x1: Int, y1: Int }, item: { ax: Int, ay: Int, bx: Int, by: Int } } -> { count: Int, x1: Int, y1: Int } =>
+            let xe  = it.item.ax in
+            let ye1 = Int.min(it.item.ay, it.item.by) in
+            let ye2 = Int.max(it.item.ay, it.item.by) in
+            let hits = Bool.and(Bool.and(xe > it.acc.x1, ye1 <= it.acc.y1), ye2 > it.acc.y1) in
+            match hits {
+                true  -> { count: it.acc.count + 1, x1: it.acc.x1, y1: it.acc.y1 }
+                false -> it.acc
+            }
+
+        -- Main fold step: check each pair and update max area
+        checkPair :: Pure { acc: { maxArea: Int, vEdges: List<{ ax: Int, ay: Int, bx: Int, by: Int }>, hEdges: List<{ ax: Int, ay: Int, bx: Int, by: Int }> }, item: { fst: { x: Int, y: Int }, i: Int, j: Int, snd: { x: Int, y: Int } } } -> { maxArea: Int, vEdges: List<{ ax: Int, ay: Int, bx: Int, by: Int }>, hEdges: List<{ ax: Int, ay: Int, bx: Int, by: Int }> } =>
+            let x1 = Int.min(it.item.fst.x, it.item.snd.x) in
+            let x2 = Int.max(it.item.fst.x, it.item.snd.x) in
+            let y1 = Int.min(it.item.fst.y, it.item.snd.y) in
+            let y2 = Int.max(it.item.fst.y, it.item.snd.y) in
+            match Bool.or(x1 == x2, y1 == y2) {
+                true  -> it.acc
+                false ->
+                    let vInit   = { blocked: false, x1: x1, x2: x2, y1: y1, y2: y2 } in
+                    let vResult = List.foldUntil(it.acc.vEdges, vInit, checkVEdge, isBlocked) in
+                    match vResult.blocked {
+                        true  -> it.acc
+                        false ->
+                            let hInit   = { blocked: false, x1: x1, x2: x2, y1: y1, y2: y2 } in
+                            let hResult = List.foldUntil(it.acc.hEdges, hInit, checkHEdge, isBlocked) in
+                            match hResult.blocked {
+                                true  -> it.acc
+                                false ->
+                                    let pInit   = { count: 0, x1: x1, y1: y1 } in
+                                    let pResult = List.fold(it.acc.vEdges, pInit, countParity) in
+                                    match pResult.count % 2 == 1 {
+                                        false -> it.acc
+                                        true  ->
+                                            let area = (x2 - x1 + 1) * (y2 - y1 + 1) in
+                                            match area > it.acc.maxArea {
+                                                true  -> { maxArea: area, vEdges: it.acc.vEdges, hEdges: it.acc.hEdges }
+                                                false -> it.acc
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_9a/input.txt") -> 1560299548
+    }
+}

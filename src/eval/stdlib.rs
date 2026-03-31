@@ -542,8 +542,8 @@ pub fn dispatch(
                         .zip(b)
                         .map(|(x, y)| {
                             Value::Record(vec![
-                                ("_0".to_string(), x),
-                                ("_1".to_string(), y),
+                                ("fst".to_string(), x),
+                                ("snd".to_string(), y),
                             ])
                         })
                         .collect(),

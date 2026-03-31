@@ -1,0 +1,34 @@
+-- AoC Day 9: Movie Theater
+--
+-- Find the largest rectangle whose opposite corners are both red tiles.
+-- Area of rectangle with corners (x1,y1) and (x2,y2) = (|dx|+1) * (|dy|+1).
+-- Generate all pairs with combinations2, fold to find the max.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        let pts   = List.map(lines, parsePt) in
+        let pairs = List.combinations2(pts) in
+        List.fold(pairs, 0, maxArea)
+
+    helpers: {
+        parsePt :: Pure String -> { x: Int, y: Int } =>
+            let parts = String.split(it, ",") in
+            let xStr  = Maybe.getOr(List.head(parts), "0") in
+            let yStr  = Maybe.getOr(List.head(List.tail(parts)), "0") in
+            { x: Result.unwrapOr(Int.parse(xStr), 0),
+              y: Result.unwrapOr(Int.parse(yStr), 0) }
+
+        maxArea :: Pure { acc: Int, item: { fst: { x: Int, y: Int }, i: Int, j: Int, snd: { x: Int, y: Int } } } -> Int =>
+            let dx = Int.abs(it.item.fst.x - it.item.snd.x) + 1 in
+            let dy = Int.abs(it.item.fst.y - it.item.snd.y) + 1 in
+            Int.max(it.acc, dx * dy)
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_9/input.txt") -> 4776487744
+    }
+}

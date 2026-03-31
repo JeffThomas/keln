@@ -354,6 +354,7 @@ List.zip          { Pure List<T>, List<U>                -> List<{fst:T,snd:U}> 
 List.flatten      { Pure List<List<T>>                   -> List<T>              }
 List.sort         { Pure List<T> where T: Ord            -> List<T>              }
 List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:Int,snd:T}> }
+List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U,Bool> -> U | E }
 ```
 
 **`List.tail` returns `List<T>` directly — NOT `Maybe<List<T>>`.** Do not wrap it in `Maybe.getOr`.
@@ -363,6 +364,8 @@ List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:
 **`List.sort` ordering for records:** records sort by field name alphabetically, then by value. A record `{ dist: Int, i: Int, j: Int }` sorts by `dist` first (d < i < j). Use this to sort-by-key without a comparator function.
 
 **`List.combinations2`** returns all unordered pairs from a list as `{fst: T, i: Int, j: Int, snd: T}` records, where `i < j` are the original indices. The pairs are generated natively in Rust — use this instead of a nested fold when you need all pairs (see performance pitfall below).
+
+**`List.foldUntil(list, init, stepFn, stopFn)`** — like `List.fold` but stops early when `stopFn(acc)` returns `true`. The step function receives `{acc: U, item: T}` (same as `List.fold`). Use this when you need to terminate a fold before processing the entire list (e.g. Kruskal's algorithm stopping at a single component).
 
 ### Map
 ```keln
