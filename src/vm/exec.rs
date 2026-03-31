@@ -602,6 +602,15 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             dispatch_builtin(name, args)
         }
+        "List.foldUntil" => {
+            // foldUntil(list, init, stepFn, stopFn)
+            if let [list, init, Value::FnRef(step_name), Value::FnRef(stop_name)] = &args[..]
+                && module.fn_idx(step_name.as_str()).is_some()
+                && module.fn_idx(stop_name.as_str()).is_some() {
+                return exec_fold_until_user(module, list.clone(), init.clone(), step_name, stop_name);
+            }
+            dispatch_builtin(name, args)
+        }
         _ => dispatch_builtin(name, args),
     }
 }
@@ -632,6 +641,25 @@ fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Valu
         result.push(execute_fn(module, fn_name, item)?);
     }
     Ok(Value::List(result))
+}
+
+fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name: &str, stop_name: &str) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.foldUntil: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("item".to_string(), item),
+        ]);
+        acc = execute_fn(module, step_name, arg)?;
+        if execute_fn(module, stop_name, acc.clone())? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
 }
 
 fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {

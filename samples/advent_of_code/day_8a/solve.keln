@@ -1,0 +1,75 @@
+-- AoC Day 8a: Playground Part Two
+--
+-- Continue Kruskal's algorithm until all nodes are in one component.
+-- Return the product of the X coordinates of the last two nodes joined.
+--
+-- Uses List.foldUntil to stop as soon as components == 1, avoiding
+-- the cost of processing all 499k pairs after the spanning tree is done.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines    = File.readLines(path) in
+        let pts      = List.map(lines, parsePt) in
+        let n        = List.len(pts) in
+        let rawPairs = List.combinations2(pts) in
+        let dists    = List.map(rawPairs, computeDist) in
+        let sorted   = List.sort(dists) in
+        let initAcc  = { uf: makeUF(n), components: n, lastI: 0, lastJ: 0 } in
+        let finalAcc = List.foldUntil(sorted, initAcc, applyEdge, isDone) in
+        let xi       = Maybe.getOr(List.head(List.drop(pts, finalAcc.lastI)), { x: 1, y: 0, z: 0 }).x in
+        let xj       = Maybe.getOr(List.head(List.drop(pts, finalAcc.lastJ)), { x: 1, y: 0, z: 0 }).x in
+        xi * xj
+
+    helpers: {
+        parsePt :: Pure String -> { x: Int, y: Int, z: Int } =>
+            let parts = String.split(it, ",") in
+            let xStr  = Maybe.getOr(List.head(parts), "0") in
+            let tail1 = List.tail(parts) in
+            let yStr  = Maybe.getOr(List.head(tail1), "0") in
+            let tail2 = List.tail(tail1) in
+            let zStr  = Maybe.getOr(List.head(tail2), "0") in
+            { x: Result.unwrapOr(Int.parse(xStr), 0),
+              y: Result.unwrapOr(Int.parse(yStr), 0),
+              z: Result.unwrapOr(Int.parse(zStr), 0) }
+
+        computeDist :: Pure { fst: { x: Int, y: Int, z: Int }, i: Int, j: Int, snd: { x: Int, y: Int, z: Int } } -> { dist: Int, i: Int, j: Int } =>
+            let dx = it.fst.x - it.snd.x in
+            let dy = it.fst.y - it.snd.y in
+            let dz = it.fst.z - it.snd.z in
+            { dist: dx * dx + dy * dy + dz * dz, i: it.i, j: it.j }
+
+        makeUF :: Pure Int -> Map<Int,Int> =>
+            List.fold(List.range(0, it), Map.fromList([]), initUFStep)
+
+        initUFStep :: Pure { acc: Map<Int,Int>, item: Int } -> Map<Int,Int> =>
+            Map.insert(it.acc, it.item, it.item)
+
+        find :: Pure { uf: Map<Int,Int>, i: Int } -> Int =>
+            let p = Maybe.getOr(Map.get(it.uf, it.i), it.i) in
+            match p == it.i {
+                true  -> it.i
+                false -> find({ uf: it.uf, i: p })
+            }
+
+        applyEdge :: Pure { acc: { uf: Map<Int,Int>, components: Int, lastI: Int, lastJ: Int }, item: { dist: Int, i: Int, j: Int } } -> { uf: Map<Int,Int>, components: Int, lastI: Int, lastJ: Int } =>
+            let ri = find({ uf: it.acc.uf, i: it.item.i }) in
+            let rj = find({ uf: it.acc.uf, i: it.item.j }) in
+            match ri == rj {
+                true  -> it.acc
+                false -> { uf:         Map.insert(it.acc.uf, ri, rj),
+                           components: it.acc.components - 1,
+                           lastI:      it.item.i,
+                           lastJ:      it.item.j }
+            }
+
+        isDone :: Pure { uf: Map<Int,Int>, components: Int, lastI: Int, lastJ: Int } -> Bool =>
+            it.components == 1
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_8a/input.txt") -> 36045012
+    }
+}

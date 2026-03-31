@@ -51,6 +51,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.clone"
             | "List.sort"
             | "List.combinations2"
+            | "List.foldUntil"
             | "Int.parse"
             | "Int.toString"
             | "Int.abs"
@@ -592,6 +593,33 @@ pub fn dispatch(
                     Ok(acc)
                 }
                 _ => Err(RuntimeError::new("List.fold: expected List")),
+            }
+        }
+        // foldUntil(list, init, stepFn, stopFn)
+        // Like fold, but stops as soon as stopFn(newAcc) returns true.
+        // stepFn receives { acc, item }; stopFn receives the new acc.
+        "List.foldUntil" => {
+            let mut iter = args.into_iter();
+            let list  = iter.next().ok_or_else(|| RuntimeError::new("List.foldUntil: missing list"))?;
+            let init  = iter.next().ok_or_else(|| RuntimeError::new("List.foldUntil: missing init"))?;
+            let f     = iter.next().ok_or_else(|| RuntimeError::new("List.foldUntil: missing stepFn"))?;
+            let pred  = iter.next().ok_or_else(|| RuntimeError::new("List.foldUntil: missing stopFn"))?;
+            match list {
+                Value::List(items) => {
+                    let mut acc = init;
+                    for item in items {
+                        let record = Value::Record(vec![
+                            ("acc".to_string(), acc),
+                            ("item".to_string(), item),
+                        ]);
+                        acc = ev.call_value(f.clone(), record, &sp())?;
+                        if ev.call_value(pred.clone(), acc.clone(), &sp())? == Value::Bool(true) {
+                            break;
+                        }
+                    }
+                    Ok(acc)
+                }
+                _ => Err(RuntimeError::new("List.foldUntil: expected List")),
             }
         }
         "List.sequence" => {
