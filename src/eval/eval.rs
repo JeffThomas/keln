@@ -14,6 +14,9 @@ const MAX_ITER: usize = 100_000;
 /// Maximum non-tail call depth before returning a clean error instead of
 /// overflowing the Rust stack. Deep recursion should use the bytecode VM.
 const MAX_CALL_DEPTH: usize = 2_000;
+/// Maximum expression nesting depth. Exceeding this emits a RuntimeError rather than
+/// silently crashing with a Rust stack overflow.
+const MAX_EXPR_DEPTH: usize = 10_000;
 
 pub struct Evaluator {
     pub(crate) env: Env,
@@ -27,6 +30,8 @@ pub struct Evaluator {
     pub(crate) call_depth: usize,
     /// Named capturing closure table: closure_table[id] = (body_expr, captured_env).
     pub(crate) closure_table: Vec<(ast::Expr, Vec<(String, Value)>)>,
+    /// Current expression nesting depth — guards against silent Rust stack overflow.
+    pub(crate) expr_depth: usize,
 }
 
 impl Default for Evaluator {
@@ -37,7 +42,7 @@ impl Default for Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0, closure_table: Vec::new() }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0, closure_table: Vec::new(), expr_depth: 0 }
     }
 
     // =========================================================================
@@ -245,6 +250,35 @@ impl Evaluator {
                 Ok(result)
             }
             ast::Expr::Paren(inner, _) => self.eval_tail(inner),
+            ast::Expr::LetIn { .. } | ast::Expr::ClosureExpr { .. } => {
+                let mut cur: &ast::Expr = expr;
+                let mut scopes = 0usize;
+                loop {
+                    match cur {
+                        ast::Expr::LetIn { binding, body, .. } => {
+                            let v = self.eval_expr(&binding.value)?;
+                            self.env.push_scope();
+                            scopes += 1;
+                            self.bind_pattern_to_env(&binding.pattern, v);
+                            cur = body;
+                        }
+                        ast::Expr::ClosureExpr { name, body, rest, .. } => {
+                            let captured = self.env.snapshot();
+                            let id = self.closure_table.len();
+                            self.closure_table.push((*body.clone(), captured));
+                            self.env.push_scope();
+                            scopes += 1;
+                            self.env.bind(name, Value::Closure { id });
+                            cur = rest;
+                        }
+                        other => {
+                            let result = self.eval_tail(other)?;
+                            for _ in 0..scopes { self.env.pop_scope(); }
+                            return Ok(result);
+                        }
+                    }
+                }
+            }
             ast::Expr::Match { scrutinee, arms, span } => {
                 let scrut = self.eval_expr(scrutinee)?;
                 for arm in arms {
@@ -267,6 +301,19 @@ impl Evaluator {
     // =========================================================================
 
     pub fn eval_expr(&mut self, expr: &ast::Expr) -> Result<Value, RuntimeError> {
+        if self.expr_depth >= MAX_EXPR_DEPTH {
+            return Err(RuntimeError::new(format!(
+                "expression nesting depth limit ({}) exceeded — expression too deeply nested or unbounded recursion in non-tail position",
+                MAX_EXPR_DEPTH,
+            )));
+        }
+        self.expr_depth += 1;
+        let result = self.eval_expr_impl(expr);
+        self.expr_depth -= 1;
+        result
+    }
+
+    fn eval_expr_impl(&mut self, expr: &ast::Expr) -> Result<Value, RuntimeError> {
         match expr {
             ast::Expr::IntLiteral(n, _) => Ok(Value::Int(*n)),
             ast::Expr::FloatLiteral(f, _) => Ok(Value::Float(*f)),
@@ -568,24 +615,34 @@ impl Evaluator {
                 Ok(Value::Unit)
             }
 
-            ast::Expr::LetIn { binding, body, .. } => {
-                let v = self.eval_expr(&binding.value)?;
-                self.env.push_scope();
-                self.bind_pattern_to_env(&binding.pattern, v);
-                let result = self.eval_expr(body)?;
-                self.env.pop_scope();
-                Ok(result)
-            }
-
-            ast::Expr::ClosureExpr { name, body, rest, .. } => {
-                let captured = self.env.snapshot();
-                let id = self.closure_table.len();
-                self.closure_table.push((*body.clone(), captured));
-                self.env.push_scope();
-                self.env.bind(name, Value::Closure { id });
-                let result = self.eval_expr(rest)?;
-                self.env.pop_scope();
-                Ok(result)
+            ast::Expr::LetIn { .. } | ast::Expr::ClosureExpr { .. } => {
+                let mut cur: &ast::Expr = expr;
+                let mut scopes = 0usize;
+                loop {
+                    match cur {
+                        ast::Expr::LetIn { binding, body, .. } => {
+                            let v = self.eval_expr(&binding.value)?;
+                            self.env.push_scope();
+                            scopes += 1;
+                            self.bind_pattern_to_env(&binding.pattern, v);
+                            cur = body;
+                        }
+                        ast::Expr::ClosureExpr { name, body, rest, .. } => {
+                            let captured = self.env.snapshot();
+                            let id = self.closure_table.len();
+                            self.closure_table.push((*body.clone(), captured));
+                            self.env.push_scope();
+                            scopes += 1;
+                            self.env.bind(name, Value::Closure { id });
+                            cur = rest;
+                        }
+                        other => {
+                            let result = self.eval_expr(other)?;
+                            for _ in 0..scopes { self.env.pop_scope(); }
+                            return Ok(result);
+                        }
+                    }
+                }
             }
 
             ast::Expr::BinaryOp { left, op, right, span } => {

@@ -628,3 +628,63 @@ The type checker's `With` handling was also extended: `Type::Record` base now pr
 - Evaluation order: base record is evaluated first, then override values left to right.
 
 **No grammar change.** The `<with_expr>` syntax already accepted any expression on the left; this is a pure evaluator and type-checker semantic extension.
+
+---
+
+## Addendum 4: Lexer, Evaluator, and Stdlib Fixes
+
+### Gap 12: Keyword-Prefix Identifier Lexing
+
+**Problem:** The lexer used lexxor's `KeywordMatcher` which treated `_` as a word boundary. This caused any identifier whose prefix up to the first `_` was a reserved keyword to be lexed as two tokens. For example, `do_round` was lexed as keyword `do` + word `_round`, producing a parse error.
+
+Affected identifiers included: `do_*`, `in_*`, `out_*`, `let_*`, `not_*`, `or_*`, `and_*`, `true_*`, `false_*`, `match_*`, `fn_*`, `type_*`, and any other `keyword_suffix` pattern.
+
+**Resolution:** `KeywordMatcher` was removed entirely from the lexer. Keyword detection was moved into `IdentifierMatcher`, which already correctly matches full identifiers (letters, digits, underscores). After matching the full token, `IdentifierMatcher` checks if the result is in the keywords list. It emits `TT_KEYWORD` only when the **complete token** is a reserved word.
+
+**Effect:** `do_round`, `in_count`, `out_val`, `not_ready`, etc. now lex as single `TT_WORD` tokens. Bare `do`, `in`, `out`, `not`, etc. (followed by whitespace or symbol) still lex as `TT_KEYWORD`. Reserved words are still fully reserved as bare identifiers.
+
+**No grammar change.** The grammar already specified that identifiers must not equal a reserved keyword; this is a lexer implementation fix bringing the lexer into conformance with that rule.
+
+---
+
+### Gap 13: Silent Stack Overflow on Deep Expression Nesting
+
+**Problem:** The tree-walking evaluator's `eval_expr` function was purely recursive with no depth limit. A deeply nested AST (e.g. a long `let ... in` chain, deeply nested binary operations, or long field-access chains) would silently crash the Keln process with a Rust stack overflow (`STATUS_STACK_OVERFLOW` on Windows, SIGSEGV on Linux). No error message, no line number, no recovery.
+
+**Resolution:** Two changes were made:
+
+1. **`LetIn` and `ClosureExpr` chains made iterative.** The recursive `eval_expr → eval_expr(body)` call for consecutive `let x = e in ...` chains was replaced with an explicit loop. The loop accumulates pushed scopes and only calls `eval_expr_impl` once on the final non-let expression. This eliminates O(N) Rust stack depth for `let`-chains of length N.
+
+2. **Expression depth counter added.** `Evaluator` now tracks `expr_depth: usize`. The public `eval_expr` wrapper increments this counter, delegates to `eval_expr_impl`, then decrements. If `expr_depth ≥ MAX_EXPR_DEPTH` (currently 10,000), it immediately returns a `RuntimeError` with the message `"expression nesting depth limit (10000) exceeded"` instead of crashing.
+
+**Effect:** Long `let`-chains (the common case) no longer consume any extra Rust stack at all. Pathologically deep expression trees (nested binary ops, deeply recursive non-tail calls) produce a clean runtime error instead of a silent crash.
+
+**No grammar change.** This is a pure evaluator implementation fix.
+
+---
+
+### Gap 14: `Map.fold` Stdlib Primitive
+
+**Problem:** To reduce a map to a single value, the only option was `Map.toList(map)` + `List.fold(...)`. This required the fold callback to receive `{ acc: A, item: { key: K, value: V } }` — two levels of nesting — and if additional context was needed, it had to be threaded through the accumulator alongside the actual reduction state.
+
+**Resolution:** `Map.fold(map, init, fn)` was added to the stdlib. The callback receives `{ acc: A, key: K, value: V }` directly — one flat record with no `.item` intermediate.
+
+**Signature:**
+```keln
+Map.fold { Map<K,V>, A, FunctionRef<E, {acc:A, key:K, value:V}, A> -> A | E }
+```
+
+**Example:**
+```keln
+let total = Map.fold(scores, 0, sumValues)
+helpers: {
+    sumValues :: Pure { acc: Int, key: String, value: Int } -> Int =>
+        it.acc + it.value
+}
+```
+
+**Iteration order:** Map entries are visited in ascending key order (keys are sorted in the underlying `BTreeMap`). This is deterministic and consistent with `Map.keys`, `Map.values`, and `Map.toList`.
+
+**`Map.toList` field name clarification:** Items produced by `Map.toList` have field `value` (not `val`). The correct type is `List<{ key: K, value: V }>`.
+
+**No grammar change.** This is a pure stdlib addition.

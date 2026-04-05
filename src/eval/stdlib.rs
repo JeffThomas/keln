@@ -140,6 +140,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Map.keys"
             | "Map.values"
             | "Map.toList"
+            | "Map.fold"
             | "Map.fromList"
             | "Map.size"
             | "Map.merge"
@@ -1373,6 +1374,25 @@ pub fn dispatch(
                     }).collect()
                 )),
                 _ => Err(RuntimeError::new("Map.toList: expected Map")),
+            }
+        }
+        "Map.fold" => {
+            // Map.fold(map, init, fn) — fn receives { acc, key, value } record
+            let (map, init, f) = three(args, "Map.fold")?;
+            match map {
+                Value::Map(entries) => {
+                    let mut acc = init;
+                    for (k, v) in entries {
+                        let record = Value::Record(vec![
+                            ("acc".to_string(), acc),
+                            ("key".to_string(), k),
+                            ("value".to_string(), v),
+                        ]);
+                        acc = ev.call_value(f.clone(), record, &sp())?;
+                    }
+                    Ok(acc)
+                }
+                _ => Err(RuntimeError::new("Map.fold: expected Map")),
             }
         }
         "Map.fromList" => {

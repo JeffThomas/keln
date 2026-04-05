@@ -1,0 +1,84 @@
+-- AoC Day 11: Reactor
+--
+-- Count all paths from "you" to "out" in a directed DAG.
+-- Input format: "device: neighbor1 neighbor2 ..." (one per line)
+--
+-- Algorithm: iterative topological path counting.
+--   Start: memo["out"] = 1  (the destination counts as 1 path)
+--   Each round: for every node whose children ALL have memo entries,
+--               compute its count = sum of children's counts.
+--   Repeat until memo["you"] is resolved.
+
+fn solve {
+    IO String -> Int
+    in: path
+    out:
+        let lines      = File.readLines(path) in
+        let non_empty  = List.filter(lines, isNonEmptyLine) in
+        let graph      = List.fold(non_empty, Map.empty, buildGraph) in
+        let num_rounds = List.len(Map.keys(graph)) in
+        let start      = { memo: Map.insert(Map.empty, "out", 1), graph: graph } in
+        let final_state = List.foldUntil(List.range(0, num_rounds), start, roundStep, stateHasYou) in
+        Maybe.getOr(Map.get(final_state.memo, "you"), 0)
+
+    helpers: {
+        isNonEmptyLine :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        isNonEmptyToken :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        buildGraph :: Pure { acc: Map<String, List<String>>, item: String } -> Map<String, List<String>> =>
+            let parts     = String.split(it.item, ":") in
+            let device    = String.trim(Maybe.getOr(List.head(parts), "")) in
+            let rest_str  = String.trim(Maybe.getOr(List.head(List.tail(parts)), "")) in
+            let neighbors = List.filter(String.split(rest_str, " "), isNonEmptyToken) in
+            Map.insert(it.acc, device, neighbors)
+
+        roundStep :: Pure { acc: { memo: Map<String, Int>, graph: Map<String, List<String>> }, item: Int } -> { memo: Map<String, Int>, graph: Map<String, List<String>> } =>
+            { memo: compute_round({ graph: it.acc.graph, memo: it.acc.memo }), graph: it.acc.graph }
+
+        stateHasYou :: Pure { memo: Map<String, Int>, graph: Map<String, List<String>> } -> Bool =>
+            Map.contains(it.memo, "you")
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_11/example.txt") -> 5
+        given("samples/advent_of_code/day_11/input.txt") -> 5
+    }
+}
+
+fn compute_round {
+    Pure { graph: Map<String, List<String>>, memo: Map<String, Int> } -> Map<String, Int>
+    in: args
+    out:
+        let pairs = Map.toList(args.graph) in
+        let state = { result: args.memo, base: args.memo } in
+        let final_state = List.fold(pairs, state, updateNode) in
+        final_state.result
+
+    helpers: {
+        checkResolved :: Pure { acc: { all_ok: Bool, base: Map<String, Int> }, item: String } -> { all_ok: Bool, base: Map<String, Int> } =>
+            match it.acc.all_ok {
+                false -> it.acc
+                true  -> { all_ok: Map.contains(it.acc.base, it.item), base: it.acc.base }
+            }
+
+        sumChild :: Pure { acc: { total: Int, base: Map<String, Int> }, item: String } -> { total: Int, base: Map<String, Int> } =>
+            { total: it.acc.total + Maybe.getOr(Map.get(it.acc.base, it.item), 0), base: it.acc.base }
+
+        updateNode :: Pure { acc: { result: Map<String, Int>, base: Map<String, Int> }, item: { key: String, value: List<String> } } -> { result: Map<String, Int>, base: Map<String, Int> } =>
+            match Map.contains(it.acc.result, it.item.key) {
+                true  -> it.acc
+                false ->
+                    let children = it.item.value in
+                    let checked  = List.fold(children, { all_ok: true, base: it.acc.base }, checkResolved) in
+                    match checked.all_ok {
+                        false -> it.acc
+                        true  ->
+                            let summed = List.fold(children, { total: 0, base: it.acc.base }, sumChild) in
+                            { result: Map.insert(it.acc.result, it.item.key, summed.total), base: it.acc.base }
+                    }
+            }
+    }
+}

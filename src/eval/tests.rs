@@ -1218,6 +1218,25 @@ fn raceTest { IO Unit -> Int
         assert_eq!(result, Ok(Value::Int(2)));
     }
 
+    #[test]
+    fn test_map_fold_sums_values() {
+        let result = eval_fn(
+            r#"fn mapTest { Pure Unit -> Int
+    in: _
+    out:
+        let m = Map.insert(Map.insert(Map.insert(Map.empty(), "a", 1), "b", 2), "c", 3) in
+        Map.fold(m, 0, addValue)
+    helpers: {
+        addValue :: Pure { acc: Int, key: String, value: Int } -> Int =>
+            it.acc + it.value
+    }
+}"#,
+            "mapTest",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
     // =========================================================================
     // Set<T>
     // =========================================================================
@@ -1518,5 +1537,39 @@ fn raceTest { IO Unit -> Int
             Value::Unit,
         );
         assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_expr_depth_limit_returns_error_not_crash() {
+        // Directly saturate expr_depth to the limit, then verify that the next
+        // eval_expr call returns a clean RuntimeError rather than crashing the process.
+        // This avoids overflowing the parser (which is also recursive) while still
+        // exercising the guard in eval_expr.
+        use crate::eval::load_source;
+
+        let source = "fn id { Pure Int -> Int\n    in: x\n    out: x\n}";
+        let mut ev = load_source(source).expect("parse failed");
+
+        // Push depth to the limit — the next eval_expr call should fail immediately.
+        ev.expr_depth = 10_000; // == MAX_EXPR_DEPTH
+
+        let result = ev.call_fn("id", Value::Int(42));
+        assert!(
+            result.is_err(),
+            "expected depth-limit error, got {:?}",
+            result
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("depth limit"),
+            "error should mention depth limit, got: {}",
+            msg
+        );
+
+        // After the error the counter must have been restored (not left corrupted).
+        // Reset and confirm normal evaluation works again.
+        ev.expr_depth = 0;
+        let ok = ev.call_fn("id", Value::Int(7)).expect("should succeed after reset");
+        assert_eq!(ok, Value::Int(7));
     }
 }

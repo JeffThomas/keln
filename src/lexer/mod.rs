@@ -8,7 +8,6 @@ use lexxor::input::InputReader;
 use lexxor::matcher::exact::ExactMatcher;
 use lexxor::matcher::float::FloatMatcher;
 use lexxor::matcher::integer::IntegerMatcher;
-use lexxor::matcher::keyword::KeywordMatcher;
 use self::symbol_matcher::SingleSymbolMatcher;
 use lexxor::matcher::whitespace::WhitespaceMatcher;
 use self::identifier_matcher::IdentifierMatcher;
@@ -17,22 +16,20 @@ use lexxor::{LexxError, Lexxer, Lexxor};
 
 use self::comment_matcher::CommentMatcher;
 use self::string_matcher::StringMatcher;
-use self::tokens::{KEYWORDS, OPERATORS, TT_KEYWORD, TT_OPERATOR};
+use self::tokens::{KEYWORDS, OPERATORS, TT_OPERATOR};
 
 /// Create a configured Keln lexer for the given source code.
 ///
 /// Matcher precedence strategy:
-/// - precedence 0: WordMatcher, WhitespaceMatcher, SymbolMatcher (base-level catch-alls)
+/// - precedence 0: IdentifierMatcher (handles both identifiers and keywords), WhitespaceMatcher, SymbolMatcher
 /// - precedence 1: IntegerMatcher, FloatMatcher (numeric literals)
 /// - precedence 2: ExactMatcher for multi-char operators (->  |>  <-  ==  !=  >=  <=  ..  ::  =>)
-/// - precedence 3: KeywordMatcher for reserved keywords (fn, type, let, match, etc.)
-/// - precedence 4: CommentMatcher (-- comments must beat the subtraction operator)
-/// - precedence 5: StringMatcher (string literals)
+/// - precedence 3: CommentMatcher (-- comments must beat the subtraction operator)
+/// - precedence 4: StringMatcher (string literals)
 ///
-/// The precedence ensures:
-/// - "fn" is recognized as a keyword, not a word
-/// - "->" is recognized as an operator, not "-" then ">"
-/// - "--" starts a comment, not two minus signs
+/// IdentifierMatcher handles keyword detection internally: it matches the full identifier
+/// (letters, digits, underscores) and emits TT_KEYWORD only when the complete token is a
+/// reserved word. This means `do_round` lexes as a single TT_WORD, not `do` + `_round`.
 pub fn create_lexer(source: &str) -> Box<dyn Lexxer> {
     let input = InputReader::new(std::io::Cursor::new(source.as_bytes().to_vec()));
 
@@ -44,6 +41,7 @@ pub fn create_lexer(source: &str) -> Box<dyn Lexxer> {
                 index: 0,
                 precedence: 0,
                 running: true,
+                keywords: KEYWORDS,
             }),
             Box::new(WhitespaceMatcher {
                 index: 0,
@@ -76,16 +74,10 @@ pub fn create_lexer(source: &str) -> Box<dyn Lexxer> {
                 TT_OPERATOR,
                 2,
             )),
-            // Keywords (precedence 3) — must beat WordMatcher
-            Box::new(KeywordMatcher::build_matcher_keyword(
-                KEYWORDS.to_vec(),
-                TT_KEYWORD,
-                3,
-            )),
-            // Comments (precedence 4) — "--" must beat ExactMatcher's potential matches
-            Box::new(CommentMatcher::new(4)),
-            // String literals (precedence 5)
-            Box::new(StringMatcher::new(5)),
+            // Comments (precedence 3) — "--" must beat ExactMatcher's potential matches
+            Box::new(CommentMatcher::new(3)),
+            // String literals (precedence 4)
+            Box::new(StringMatcher::new(4)),
         ],
     ))
 }
@@ -319,6 +311,27 @@ mod tests {
                 "{:?} should be a word (effect name)",
                 token.value
             );
+        }
+    }
+
+    #[test]
+    fn test_keyword_prefix_identifiers_are_words() {
+        // Identifiers that START with a keyword but continue with _suffix must lex as
+        // a single TT_WORD, not split into keyword + remainder.
+        let cases = [
+            "do_round", "in_count", "out_val", "let_binding",
+            "not_ready", "or_else", "and_then", "true_val", "false_alarm",
+            "match_result", "fn_name", "type_alias",
+        ];
+        for &ident in &cases {
+            let tokens = tokenize_filtered(ident).expect("tokenization should succeed");
+            assert_eq!(tokens.len(), 1, "`{}` should lex as a single token", ident);
+            assert_eq!(
+                tokens[0].token_type, TT_WORD,
+                "`{}` should be TT_WORD, not TT_KEYWORD",
+                ident
+            );
+            assert_eq!(tokens[0].value, ident);
         }
     }
 }

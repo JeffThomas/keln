@@ -376,22 +376,27 @@ List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U
 
 ### Map
 ```keln
-Map.empty       { Pure Unit                            -> Map<K,V>             }
-Map.insert      { Pure Map<K,V>, K, V                  -> Map<K,V>             }
-Map.get         { Pure Map<K,V>, K                     -> Maybe<V>             }
-Map.remove      { Pure Map<K,V>, K                     -> Map<K,V>             }
-Map.contains    { Pure Map<K,V>, K                     -> Bool                 }
-Map.keys        { Pure Map<K,V>                        -> List<K>              }
-Map.values      { Pure Map<K,V>                        -> List<V>              }
-Map.toList      { Pure Map<K,V>                        -> List<{key:K,val:V}>  }
-Map.fromList    { Pure List<{key:K,val:V}>             -> Map<K,V>             }
-Map.size        { Pure Map<K,V>                        -> Int                  }
-Map.merge       { Pure Map<K,V>, Map<K,V>              -> Map<K,V>             }
+Map.empty       { Pure Unit                                         -> Map<K,V>             }
+Map.insert      { Pure Map<K,V>, K, V                               -> Map<K,V>             }
+Map.get         { Pure Map<K,V>, K                                  -> Maybe<V>             }
+Map.remove      { Pure Map<K,V>, K                                  -> Map<K,V>             }
+Map.contains    { Pure Map<K,V>, K                                  -> Bool                 }
+Map.keys        { Pure Map<K,V>                                     -> List<K>              }
+Map.values      { Pure Map<K,V>                                     -> List<V>              }
+Map.toList      { Pure Map<K,V>                                     -> List<{key:K,value:V}>}
+Map.fromList    { Pure List<{key:K,value:V}>                        -> Map<K,V>             }
+Map.fold        { Map<K,V>, A, FunctionRef<E,{acc:A,key:K,value:V},A> -> A     | E         }
+Map.size        { Pure Map<K,V>                                     -> Int                  }
+Map.merge       { Pure Map<K,V>, Map<K,V>                           -> Map<K,V>             }
 ```
 
 **`Map.empty` and `Set.empty` are zero-arg constants** that evaluate immediately
 in any value position — `let m = Map.empty in ...` and `{ myMap: Map.empty }` both
 produce a proper empty map. `Map.fromList([])` remains a valid alternative.
+
+**`Map.toList` field name is `value`, not `val`** — items are `{ key: K, value: V }`. Do not use `.val`.
+
+**`Map.fold(map, init, fn)`** — like `List.fold` but iterates over key-value pairs. The callback receives `{ acc: A, key: K, value: V }` directly (no `.item` nesting). Prefer this over `Map.toList` + `List.fold` when you only need to reduce the map.
 
 ### Set
 ```keln
@@ -807,6 +812,7 @@ Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
 | `Maybe.getOr(List.tail(xs), [])` | `List.tail(xs)` directly | `List.tail` returns `List<T>`, not `Maybe<List<T>>` |
 | `List.prepend(item, list)` | `List.prepend(list, item)` | First arg is the list; item goes to front |
 | `let x = "out" in ...` | Use a different name | `out`, `in`, `verify` are reserved keywords |
+| `out: do { ... }` then `helpers: { ... }` | Use `out: let ... in ...` chain then `helpers:` | Parser does not handle `helpers:` after a `do`-block body |
 | `threshold` as a field or variable | Use `cutoff`, `limit`, `max_val`, etc. | `threshold` is a reserved keyword (`promote: threshold` syntax) |
 | Closure with `.with()` for context capture | `let name :: effects In -> Out => body in rest` | `.with()` on a function eagerly binds and does not capture env; use named capturing helper for capture |
 | Explicit full record copy `{ a: r.a, b: r.b, c: newC }` | `r.with(c: newC)` | `.with()` on a record returns an updated copy; no need to list unchanged fields |

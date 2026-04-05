@@ -1,16 +1,19 @@
 use lexxor::matcher::{Matcher, MatcherResult};
-use lexxor::token::{TOKEN_TYPE_WORD, Token};
+use lexxor::token::{TOKEN_TYPE_KEYWORD, TOKEN_TYPE_WORD, Token};
 use std::collections::HashMap;
 use std::fmt::Debug;
 
 /// Custom identifier matcher for Keln.
 /// Matches identifiers that start with a letter and continue with letters, digits, or underscores.
-/// This replaces lexxor's built-in WordMatcher which only matches alphabetic characters.
+/// Also handles keyword detection: if the fully-matched identifier is in `keywords`, emits
+/// TT_KEYWORD instead of TT_WORD. This avoids the lexxor KeywordMatcher footgun where `_` is
+/// treated as a word boundary, causing `do_round` to lex as keyword `do` + word `_round`.
 #[derive(Debug, Clone, Copy)]
 pub struct IdentifierMatcher {
     pub index: usize,
     pub precedence: u8,
     pub running: bool,
+    pub keywords: &'static [&'static str],
 }
 
 impl Matcher for IdentifierMatcher {
@@ -69,9 +72,15 @@ impl IdentifierMatcher {
     #[inline(always)]
     fn make_token(&self, value: &[char]) -> MatcherResult {
         if self.index > 0 {
+            let word: String = value[0..self.index].iter().collect();
+            let token_type = if self.keywords.contains(&word.as_str()) {
+                TOKEN_TYPE_KEYWORD
+            } else {
+                TOKEN_TYPE_WORD
+            };
             MatcherResult::Matched(Token {
-                value: value[0..self.index].iter().collect(),
-                token_type: TOKEN_TYPE_WORD,
+                value: word,
+                token_type,
                 len: self.index,
                 line: 0,
                 column: self.index,

@@ -14,7 +14,7 @@ fn camel_to_snake(s: &str) -> String {
     for (i, &c) in chars.iter().enumerate() {
         if c.is_ascii_uppercase() && i > 0 {
             let prev_lower = chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit();
-            let next_lower = chars.get(i + 1).map_or(false, |n| n.is_ascii_lowercase());
+            let next_lower = chars.get(i + 1).is_some_and(|n| n.is_ascii_lowercase());
             if prev_lower || next_lower {
                 out.push('_');
             }
