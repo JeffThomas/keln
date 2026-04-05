@@ -523,29 +523,43 @@ impl Evaluator {
 
             ast::Expr::With { function, binding, span } => {
                 let fn_val = self.eval_expr(function)?;
-                let (fn_name, mut bound) = match fn_val {
-                    Value::FnRef(n) => (n, Vec::new()),
-                    Value::PartialFn { name, bound } => (name, bound),
-                    other => {
-                        return Err(RuntimeError::at(
-                            format!("cannot apply .with to non-function: {}", other),
-                            span,
-                        ))
+                // Collect override pairs (name, value)
+                let overrides: Vec<(String, Value)> = match binding {
+                    ast::WithBinding::Named(name, val_expr) => {
+                        vec![(name.clone(), self.eval_expr(val_expr)?)]
+                    }
+                    ast::WithBinding::Record(fvs) => {
+                        let mut pairs = Vec::new();
+                        for fv in fvs {
+                            pairs.push((fv.name.clone(), self.eval_expr(&fv.value)?));
+                        }
+                        pairs
                     }
                 };
-                match binding {
-                    ast::WithBinding::Named(field, val_expr) => {
-                        let v = self.eval_expr(val_expr)?;
-                        bound.push((field.clone(), v));
-                    }
-                    ast::WithBinding::Record(fields) => {
-                        for fv in fields {
-                            let v = self.eval_expr(&fv.value)?;
-                            bound.push((fv.name.clone(), v));
+                match fn_val {
+                    Value::Record(mut fields) => {
+                        // Record update: override existing fields or append new ones
+                        for (name, val) in overrides {
+                            if let Some(f) = fields.iter_mut().find(|(n, _)| *n == name) {
+                                f.1 = val;
+                            } else {
+                                fields.push((name, val));
+                            }
                         }
+                        Ok(Value::Record(fields))
                     }
+                    Value::FnRef(name) => {
+                        Ok(Value::PartialFn { name, bound: overrides })
+                    }
+                    Value::PartialFn { name, mut bound } => {
+                        bound.extend(overrides);
+                        Ok(Value::PartialFn { name, bound })
+                    }
+                    other => Err(RuntimeError::at(
+                        format!("cannot apply .with to non-function, non-record: {}", other),
+                        span,
+                    ))
                 }
-                Ok(Value::PartialFn { name: fn_name, bound })
             }
 
             ast::Expr::Let(lb) => {

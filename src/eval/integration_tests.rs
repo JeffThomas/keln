@@ -901,6 +901,68 @@ fn make_frac {
     }
 
     // =========================================================================
+    // Record .with() — field update on plain record values
+    // =========================================================================
+
+    const RECORD_WITH_SRC: &str = r#"
+fn update_count {
+    Pure { count: Int, label: String } -> Int
+    in: args
+    out:
+        let updated = args.with(count: args.count + 1) in
+        updated.count
+}
+
+fn update_multi {
+    Pure { x: Int, y: Int, z: Int } -> Int
+    in: args
+    out:
+        let moved = args.with({ x: 10, y: 20 }) in
+        moved.x + moved.y + moved.z
+}
+
+fn with_in_fold {
+    Pure { items: List<Int> } -> Int
+    in: args
+    out:
+        let init = { acc: 0, seen: 0 } in
+        let step :: Pure { acc: { acc: Int, seen: Int }, item: Int } -> { acc: Int, seen: Int } =>
+            it.acc.with({ acc: it.acc.acc + it.item, seen: it.acc.seen + 1 })
+        in
+        let result = List.fold(args.items, init, step) in
+        result.acc
+}
+"#;
+
+    #[test]
+    fn test_record_with_single_field() {
+        let arg = Value::Record(vec![
+            ("count".to_string(), Value::Int(5)),
+            ("label".to_string(), Value::Str("x".to_string())),
+        ]);
+        assert_eq!(eval_fn(RECORD_WITH_SRC, "update_count", arg), Ok(Value::Int(6)));
+    }
+
+    #[test]
+    fn test_record_with_multi_field() {
+        let arg = Value::Record(vec![
+            ("x".to_string(), Value::Int(1)),
+            ("y".to_string(), Value::Int(2)),
+            ("z".to_string(), Value::Int(3)),
+        ]);
+        assert_eq!(eval_fn(RECORD_WITH_SRC, "update_multi", arg), Ok(Value::Int(33)));
+    }
+
+    #[test]
+    fn test_record_with_in_fold() {
+        let arg = Value::Record(vec![(
+            "items".to_string(),
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+        )]);
+        assert_eq!(eval_fn(RECORD_WITH_SRC, "with_in_fold", arg), Ok(Value::Int(6)));
+    }
+
+    // =========================================================================
     // Regression 3: Lexer InputString truncation at 1024 characters.
     // Before the fix, lexxor::InputString silently truncated source to 1024
     // chars. Programs longer than that would fail to parse or lose definitions.

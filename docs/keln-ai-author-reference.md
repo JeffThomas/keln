@@ -573,6 +573,25 @@ let worker  = workerLoop.with({
 Bound values are **eagerly evaluated** at `.with()` call time. This is
 partial application, not closure capture. No environment is captured.
 
+**`.with()` also works on plain record values** — it produces a new record
+with the specified fields overridden (or appended if the field doesn't exist):
+
+```keln
+-- Single field update:
+let updated = state.with(count: state.count + 1)
+
+-- Multi-field update:
+let moved = pos.with({ x: newX, y: newY })
+
+-- Inside a fold step (combining record.with + capturing helper):
+let step :: Pure { acc: { sum: Int, n: Int }, item: Int } -> { sum: Int, n: Int } =>
+    it.acc.with({ sum: it.acc.sum + it.item, n: it.acc.n + 1 })
+in
+List.fold(items, { sum: 0, n: 0 }, step)
+```
+
+Record `.with()` is immutable — the original record is unchanged.
+
 ---
 
 ## 10a. Named Capturing Helpers
@@ -789,7 +808,8 @@ Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
 | `List.prepend(item, list)` | `List.prepend(list, item)` | First arg is the list; item goes to front |
 | `let x = "out" in ...` | Use a different name | `out`, `in`, `verify` are reserved keywords |
 | `threshold` as a field or variable | Use `cutoff`, `limit`, `max_val`, etc. | `threshold` is a reserved keyword (`promote: threshold` syntax) |
-| Closure with `.with()` for context capture | `let name :: effects In -> Out => body in rest` | `.with()` eagerly binds and does not capture env; named capturing helper does |
+| Closure with `.with()` for context capture | `let name :: effects In -> Out => body in rest` | `.with()` on a function eagerly binds and does not capture env; use named capturing helper for capture |
+| Explicit full record copy `{ a: r.a, b: r.b, c: newC }` | `r.with(c: newC)` | `.with()` on a record returns an updated copy; no need to list unchanged fields |
 | `let step :: ... => body in ...` with `keln compile` | Use `keln verify` / `keln run` | Named capturing helpers not supported in bytecode VM |
 
 ---

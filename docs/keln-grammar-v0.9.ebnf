@@ -625,11 +625,14 @@
     = "clone" "(" <expr> ")"
     (* produces two independent owned values: used as multi_let_binding *)
 
--- 8.11 Partial application (.with)
+-- 8.11 Partial application and record update (.with)
+-- When applied to a FunctionRef or PartialFn: binds parameters, returning a PartialFn.
+-- When applied to a plain record value: returns a new record with the specified
+--   fields overridden (existing fields unchanged, new fields appended).
 
 <with_expr>
     = <lower_ident> "." "with" "(" <lower_ident> ":" <expr> ")"
-    (* named form: bind one parameter *)
+    (* named form: bind/update one field *)
     | <lower_ident> "." "with" "(" <record_expr> ")"
     (* record form: bind multiple parameters at once; preferred for 3+ params *)
     | <qualified_name> "." "with" "(" <lower_ident> ":" <expr> ")"
@@ -1088,11 +1091,11 @@
 --   A do block may appear anywhere a terminal expression is valid (see Rule P2).
 --
 -- Rule P4: .with BINDS TIGHTEST
---   f.with(x: v) binds tighter than any operator.
---   f.with(x: v) |> g is parsed as (f.with(x: v)) |> g
---   f.with(x: v)(arg) is a call on the partial application result
---   .with may be chained: f.with(a: x).with(b: y)
---   Each .with application produces a new FunctionRef.
+--   e.with(x: v) binds tighter than any operator.
+--   e.with(x: v) |> g is parsed as (e.with(x: v)) |> g
+--   .with may be chained: r.with(a: x).with(b: y)
+--   On a FunctionRef: each .with produces a new PartialFn.
+--   On a record value: each .with produces a new record with updated fields.
 --
 -- Rule P5: FIELD ACCESS BEFORE CALLS
 --   r.field(args) is parsed as (r.field)(args) — field access, then call.

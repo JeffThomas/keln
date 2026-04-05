@@ -807,8 +807,44 @@ impl Checker {
                             output,
                         }
                     }
+                    Type::Record(fields) => {
+                        // Record update: infer overrides and return updated record type
+                        let mut result_fields = fields.clone();
+                        match binding {
+                            ast::WithBinding::Named(name, val) => {
+                                let val_ty = self.infer_expr(val);
+                                if let Some(f) = result_fields.iter_mut().find(|(n, _)| n == name) {
+                                    f.1 = val_ty;
+                                } else {
+                                    result_fields.push((name.clone(), val_ty));
+                                }
+                            }
+                            ast::WithBinding::Record(fvs) => {
+                                for fv in fvs {
+                                    let val_ty = self.infer_expr(&fv.value);
+                                    if let Some(f) = result_fields.iter_mut().find(|(n, _)| n == &fv.name) {
+                                        f.1 = val_ty;
+                                    } else {
+                                        result_fields.push((fv.name.clone(), val_ty));
+                                    }
+                                }
+                            }
+                        }
+                        Type::Record(result_fields)
+                    }
+                    Type::Named(_) | Type::TypeVar(_) => {
+                        // Named type or unknown — could be a record; infer value types
+                        // for error detection but be lenient about the base type
+                        match binding {
+                            ast::WithBinding::Named(_, val) => { self.infer_expr(val); }
+                            ast::WithBinding::Record(fvs) => {
+                                for fv in fvs { self.infer_expr(&fv.value); }
+                            }
+                        }
+                        Type::TypeVar("_unknown".to_string())
+                    }
                     _ => {
-                        self.err(format!("cannot use .with on non-FunctionRef type {}", fn_ty), span);
+                        self.err(format!("cannot use .with on non-record, non-function type: {}", fn_ty), span);
                         fn_ty
                     }
                 }
