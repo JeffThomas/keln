@@ -431,6 +431,18 @@ pub enum Expr {
         span: Span,
     },
 
+    /// Named capturing helper: `let name :: effects In -> Out => body in rest`
+    /// Evaluates to a Value::Closure that captures the current lexical scope.
+    ClosureExpr {
+        name: String,
+        effects: EffectSet,
+        input_type: TypeExpr,
+        output_type: TypeExpr,
+        body: Box<Expr>,
+        rest: Box<Expr>,
+        span: Span,
+    },
+
     // Arithmetic
     BinaryOp {
         left: Box<Expr>,

@@ -135,6 +135,7 @@ fn shape_expr(e: &Expr) -> String {
             format!("With({},{})", shape_expr(function), b)
         }
         Expr::Paren(inner, _) => shape_expr(inner),
+        Expr::ClosureExpr { name, body, .. } => format!("Closure({},{})", name, shape_expr(body)),
     }
 }
 
@@ -262,6 +263,7 @@ fn collect_calls(e: &Expr, out: &mut Vec<String>) {
         }
         Expr::Let(lb) => collect_calls(&lb.value, out),
         Expr::LetIn { binding, body, .. } => { collect_calls(&binding.value, out); collect_calls(body, out); }
+        Expr::ClosureExpr { body, rest, .. } => { collect_calls(body, out); collect_calls(rest, out); }
         Expr::Record { fields, .. } => {
             for f in fields { collect_calls(&f.value, out); }
         }

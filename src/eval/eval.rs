@@ -25,6 +25,8 @@ pub struct Evaluator {
     pub(crate) variant_fields: HashMap<String, Vec<ast::FieldTypeDecl>>,
     /// Current non-tail call depth — guards against Rust stack overflow.
     pub(crate) call_depth: usize,
+    /// Named capturing closure table: closure_table[id] = (body_expr, captured_env).
+    pub(crate) closure_table: Vec<(ast::Expr, Vec<(String, Value)>)>,
 }
 
 impl Default for Evaluator {
@@ -35,7 +37,7 @@ impl Default for Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0 }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0, closure_table: Vec::new() }
     }
 
     // =========================================================================
@@ -187,6 +189,10 @@ impl Evaluator {
                                 let arg = pack_args(arg_vals);
                                 return Ok(Thunk::Value(self.call_value(v, arg, span)?));
                             }
+                            Some(v @ Value::Closure { .. }) => {
+                                let arg = pack_args(arg_vals);
+                                return Ok(Thunk::Value(self.call_value(v, arg, span)?));
+                            }
                             _ => {}
                         }
                         if self.fns.contains_key(name.as_str()) {
@@ -284,7 +290,13 @@ impl Evaluator {
             }
 
             ast::Expr::QualifiedName(parts, _) => {
-                Ok(Value::FnRef(parts.join(".")))
+                let name = parts.join(".");
+                // Zero-arg constants: evaluate immediately so they work in value
+                // position (record fields, let bindings, etc.) without ambiguity.
+                if matches!(name.as_str(), "Map.empty" | "Set.empty" | "Bytes.empty") {
+                    return stdlib::dispatch(&name, vec![Value::Unit], self);
+                }
+                Ok(Value::FnRef(name))
             }
 
             ast::Expr::Call { function, args, span } => {
@@ -551,6 +563,17 @@ impl Evaluator {
                 Ok(result)
             }
 
+            ast::Expr::ClosureExpr { name, body, rest, .. } => {
+                let captured = self.env.snapshot();
+                let id = self.closure_table.len();
+                self.closure_table.push((*body.clone(), captured));
+                self.env.push_scope();
+                self.env.bind(name, Value::Closure { id });
+                let result = self.eval_expr(rest)?;
+                self.env.pop_scope();
+                Ok(result)
+            }
+
             ast::Expr::BinaryOp { left, op, right, span } => {
                 let lv = self.eval_expr(left)?;
                 let rv = self.eval_expr(right)?;
@@ -620,6 +643,17 @@ impl Evaluator {
                 } else {
                     self.call_fn(&name, merged)
                 }
+            }
+            Value::Closure { id } => {
+                let (body, captured) = self.closure_table[id].clone();
+                self.env.push_scope();
+                for (k, v) in &captured {
+                    self.env.bind(k, v.clone());
+                }
+                self.env.bind("it", arg);
+                let result = self.eval_expr(&body)?;
+                self.env.pop_scope();
+                Ok(result)
             }
             other => Err(RuntimeError::at(
                 format!("cannot call non-function value: {}", other),

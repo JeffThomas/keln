@@ -43,4 +43,15 @@ impl Env {
         }
         None
     }
+
+    /// Snapshot all currently visible bindings (outermost first, innermost wins).
+    pub fn snapshot(&self) -> Vec<(String, Value)> {
+        let mut map = std::collections::HashMap::new();
+        for scope in &self.scopes {
+            for (k, v) in scope {
+                map.insert(k.clone(), v.clone());
+            }
+        }
+        map.into_iter().collect()
+    }
 }

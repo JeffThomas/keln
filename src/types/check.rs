@@ -839,6 +839,7 @@ impl Checker {
             }
 
             ast::Expr::Paren(inner, _) => self.infer_expr(inner),
+            ast::Expr::ClosureExpr { output_type, .. } => self.resolve_type_expr(output_type, &[]),
         }
     }
 
@@ -1027,6 +1028,11 @@ impl Checker {
                                 span,
                             );
                             Type::TypeVar("_error".to_string())
+                        }
+                        TypeDef::Alias { target, .. } => {
+                            // Expand the alias and retry field access on the target type
+                            let target = target.clone();
+                            self.infer_field_access(&target, field, span)
                         }
                         _ => {
                             Type::TypeVar("_unknown".to_string())
@@ -1224,6 +1230,7 @@ impl Checker {
             ast::Expr::List(_, s) => s.clone(),
             ast::Expr::Let(lb) => lb.span.clone(),
             ast::Expr::LetIn { span, .. } => span.clone(),
+            ast::Expr::ClosureExpr { span, .. } => span.clone(),
             ast::Expr::TypeRefExpr(_, s) => s.clone(),
         }
     }

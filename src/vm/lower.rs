@@ -616,6 +616,10 @@ impl Lowerer {
                 Ok(val_reg)
             }
 
+            Expr::ClosureExpr { .. } => {
+                Err(LowerError::new("named capturing helpers (let name ::) are not supported in the bytecode VM; use the tree-walking evaluator"))
+            }
+
             Expr::LetIn { binding, body, .. } => {
                 let val_reg = self.lower_expr(ctx, &binding.value, false)?;
                 if matches!(binding.value.as_ref(), Expr::ChannelNewCloseable { .. })

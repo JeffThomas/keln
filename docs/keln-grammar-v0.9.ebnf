@@ -478,6 +478,7 @@
     | <with_expr>
     | <channel_new_expr>
     | <let_in_expr>
+    | <capturing_helper_let>
     | <wildcard>
     | "(" <expr> ")"
 
@@ -641,6 +642,15 @@
     (* binds within the enclosing do block or match arm scope *)
     | "let" <lower_ident> ":" <type_expr> "=" <expr>
 
+-- 8.13 Named capturing helper (closure let)
+-- Binds <lower_ident> to a closure that captures the current lexical scope.
+-- The argument is bound as `it` inside <body_expr>.
+-- Only supported in the tree-walking evaluator (verify/run); not in compile/run-bc.
+
+<capturing_helper_let>
+    = "let" <lower_ident> "::" <effect_set> <type_expr> "->" <type_expr>
+      "=>" <expr> "in" <expr>
+
 
 -- =============================================================================
 -- 9. PATTERNS
@@ -650,6 +660,7 @@
     = "_"                                          (* wildcard: matches anything *)
     | <lower_ident>                                (* binding: binds the value *)
     | <literal>                                    (* literal: exact match *)
+    | "-" <int_literal>                            (* negative integer literal match: -1, -42, etc. *)
     | <upper_ident>                                (* unit variant match *)
     | <upper_ident> "(" <pattern> ")"              (* tuple variant destructure *)
     | <upper_ident> "{" <field_pattern_list> "}"   (* record variant destructure *)
@@ -946,6 +957,21 @@
 --      The VM implements TCO for direct tail calls: the final expression in
 --      a function's out or do block is a call to the same function.
 --      Indirect tail calls (via another function) do not receive TCO.
+--
+-- N14. NAMED CAPTURING HELPER (CLOSURE LET)
+--      The form `let name :: effects In -> Out => body in rest` creates a
+--      named closure that captures the current lexical environment at the
+--      point of definition. Inside `body`, the argument is bound as `it`.
+--      The name is bound in `rest` as a Value::Closure and may be passed
+--      to List.fold, List.map, List.foldUntil, etc.
+--      This form is syntactically distinguished from a plain let binding by
+--      the presence of `::` as the second token after `let`.
+--      NOTE: `threshold` is a reserved keyword and may NOT be used as a
+--      field name, variable, or binding (it appears in `promote: threshold`
+--      helper syntax). The same applies to all reserved keywords in §17.
+--      RUNTIME: Named capturing helpers are only supported in the tree-walking
+--      evaluator (`keln verify`, `keln run`). The bytecode compiler
+--      (`keln compile`) rejects them with a compile-time error.
 
 
 -- =============================================================================

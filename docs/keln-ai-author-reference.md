@@ -187,6 +187,13 @@ match n {
     _ -> "nonzero"
 }
 
+-- Negative integer literals work in match patterns:
+match n {
+    -1 -> "negative one"
+    0  -> "zero"
+    _  -> "other"
+}
+
 -- Wildcard with binding:
 match state {
     Running(r) -> r.attempt
@@ -382,19 +389,9 @@ Map.size        { Pure Map<K,V>                        -> Int                  }
 Map.merge       { Pure Map<K,V>, Map<K,V>              -> Map<K,V>             }
 ```
 
-**`Map.empty` and `Set.empty` FnRef pitfall:** These zero-arg builtins are treated
-as `FunctionRef` values when referenced without being called. Do NOT use them in
-argument position or record literals directly. Always use the list constructor instead:
-```keln
--- WRONG:
-let m = Map.empty in          -- may bind a FnRef, not an empty Map
-{ myMap: Map.empty }          -- may store FnRef in the record field
-
--- RIGHT:
-let m = Map.fromList([]) in   -- empty Map, always correct
-{ myMap: Map.fromList([]) }
-```
-The same applies to `Set.empty` — use `Set.fromList([])` instead.
+**`Map.empty` and `Set.empty` are zero-arg constants** that evaluate immediately
+in any value position — `let m = Map.empty in ...` and `{ myMap: Map.empty }` both
+produce a proper empty map. `Map.fromList([])` remains a valid alternative.
 
 ### Set
 ```keln
@@ -578,6 +575,54 @@ partial application, not closure capture. No environment is captured.
 
 ---
 
+## 10a. Named Capturing Helpers
+
+When a fold/map callback needs read-only context from the outer function,
+use a **named capturing helper** instead of threading context through the
+accumulator. This eliminates accumulator bloat.
+
+**Syntax:**
+```keln
+let <name> :: <effects> <In> -> <Out> => <body> in <rest>
+```
+
+- `name` is bound in `rest` as a callable value
+- Inside `body`, the argument is bound as `it`
+- `body` captures all `let` bindings in scope at the definition point
+- Pass `name` directly to `List.fold`, `List.map`, `List.foldUntil`, etc.
+
+**Example — fold with captured context:**
+```keln
+fn sumWithOffset {
+    Pure { items: List<Int>, offset: Int } -> Int
+    in: args
+    out:
+        let offset = args.offset in
+        let addOffset :: Pure { acc: Int, item: Int } -> Int =>
+            it.acc + it.item + offset
+        in
+        List.fold(args.items, 0, addOffset)
+}
+```
+
+**vs. the bloated accumulator alternative (avoid):**
+```keln
+-- BAD: must thread offset through every fold step
+List.fold(args.items, { acc: 0, offset: args.offset }, addWithOffset)
+```
+
+**Rules:**
+- `it` is the single argument inside the body — same as top-level helpers
+- The captured environment is snapshotted at definition time; later
+  mutations to bindings are NOT reflected in the closure
+- Closures are first-class: passable, storable in records, returned from functions
+- **Only supported in `keln verify` and `keln run`** (tree-walking evaluator).
+  Using `let name ::` and then `keln compile` produces a compile error.
+- **`threshold` is a reserved keyword** — do not use it as a field or variable name.
+  Use `cutoff`, `limit`, `max_val`, etc. instead.
+
+---
+
 ## 11. Modules
 
 Modules declare typed contracts. They are not imported — they are
@@ -738,11 +783,14 @@ Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
 | `Float.approxEq` outside forall | `==` in normal code, `Float.approxEq` in forall | IEEE 754 NaN handling |
 | Multi-file programs | Single file only | Registry (Phase 5) handles library reuse |
 | Implicit clone | Explicit `clone()` | No hidden copies |
-| `Map.empty` or `Set.empty` in arg/record position | `Map.fromList([])` / `Set.fromList([])` | Zero-arg builtins bind as FnRef, not value |
+| `Map.fromList([])` when you mean `Map.empty` | `let m = Map.empty in ...` | `Map.empty` now evaluates immediately in all value positions |
 | Growing list in fold accumulator (large N) | `List.combinations2` + `List.map` | O(N²) accumulator cloning |
 | `Maybe.getOr(List.tail(xs), [])` | `List.tail(xs)` directly | `List.tail` returns `List<T>`, not `Maybe<List<T>>` |
 | `List.prepend(item, list)` | `List.prepend(list, item)` | First arg is the list; item goes to front |
 | `let x = "out" in ...` | Use a different name | `out`, `in`, `verify` are reserved keywords |
+| `threshold` as a field or variable | Use `cutoff`, `limit`, `max_val`, etc. | `threshold` is a reserved keyword (`promote: threshold` syntax) |
+| Closure with `.with()` for context capture | `let name :: effects In -> Out => body in rest` | `.with()` eagerly binds and does not capture env; named capturing helper does |
+| `let step :: ... => body in ...` with `keln compile` | Use `keln verify` / `keln run` | Named capturing helpers not supported in bytecode VM |
 
 ---
 

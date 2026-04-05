@@ -6,6 +6,24 @@ use crate::ast::*;
 use crate::lexer::tokens::*;
 use self::error::ParseError;
 
+/// Convert an UpperCamelCase or ALL_CAPS identifier to lower_snake_case.
+/// Used to generate "did you mean?" suggestions in parse errors.
+fn camel_to_snake(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            let prev_lower = chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit();
+            let next_lower = chars.get(i + 1).map_or(false, |n| n.is_ascii_lowercase());
+            if prev_lower || next_lower {
+                out.push('_');
+            }
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
 /// Parser state: walks through a filtered token stream (no whitespace/comments).
 pub struct Parser {
     tokens: Vec<Token>,
@@ -117,6 +135,11 @@ impl Parser {
         let tok = self.advance()?;
         if tok.token_type == TT_WORD && tok.value.starts_with(|c: char| c.is_ascii_lowercase()) {
             Ok((tok.value.clone(), Span { line: tok.line, column: tok.column }))
+        } else if tok.token_type == TT_KEYWORD {
+            Err(ParseError::at(&tok, &format!("'{}' is a reserved keyword; use a different name", tok.value)))
+        } else if tok.token_type == TT_WORD && tok.value.starts_with(|c: char| c.is_ascii_uppercase()) {
+            let suggestion = camel_to_snake(&tok.value);
+            Err(ParseError::at(&tok, &format!("'{}' must be lower_snake_case; did you mean '{}'?", tok.value, suggestion)))
         } else {
             Err(ParseError::at(&tok, "expected lower_snake_case identifier"))
         }
@@ -874,6 +897,17 @@ impl Parser {
                 self.advance()?;
                 Ok(Pattern::Literal(Box::new(Expr::BoolLiteral(false, span))))
             }
+            (TT_SYMBOL, "-") => {
+                self.advance()?;
+                let tok = self.peek().ok_or_else(|| self.error_eof("integer after -"))?;
+                if tok.token_type == TT_INTEGER {
+                    let tok = self.advance()?;
+                    let n: i64 = tok.value.parse().map_err(|_| ParseError::at(&tok, "invalid integer"))?;
+                    Ok(Pattern::Literal(Box::new(Expr::IntLiteral(-n, span))))
+                } else {
+                    Err(self.error_here("expected integer literal after -"))
+                }
+            }
             (TT_INTEGER, _) => {
                 let tok = self.advance()?;
                 let n: i64 = tok.value.parse().map_err(|_| ParseError::at(&tok, "invalid integer"))?;
@@ -1405,6 +1439,17 @@ impl Parser {
     }
 
     fn parse_let_expr(&mut self) -> Result<Expr, ParseError> {
+        // Detect `let name ::` — named capturing helper (closure) form.
+        // peek_nth(0) = `let`, peek_nth(1) = lower_ident, peek_nth(2) = `::`
+        let is_closure = self.peek_nth(1)
+            .map(|t| t.token_type == TT_WORD && t.value.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+            .unwrap_or(false)
+            && self.peek_nth(2)
+            .map(|t| t.token_type == TT_OPERATOR && t.value == "::")
+            .unwrap_or(false);
+        if is_closure {
+            return self.parse_closure_let_expr();
+        }
         let binding = self.parse_let_binding()?;
         if self.check_keyword("in") {
             let span = binding.span.clone();
@@ -1414,6 +1459,30 @@ impl Parser {
         } else {
             Ok(Expr::Let(binding))
         }
+    }
+
+    fn parse_closure_let_expr(&mut self) -> Result<Expr, ParseError> {
+        let span = self.current_span();
+        self.expect_keyword("let")?;
+        let (name, _) = self.expect_lower_ident()?;
+        self.expect_operator("::")?;
+        let effects = self.parse_effect_set()?;
+        let input_type = self.parse_type_expr()?;
+        self.expect_operator("->")?;
+        let output_type = self.parse_type_expr()?;
+        self.expect_operator("=>")?;
+        let body = self.parse_expr()?;
+        self.expect_keyword("in")?;
+        let rest = self.parse_expr()?;
+        Ok(Expr::ClosureExpr {
+            name,
+            effects,
+            input_type,
+            output_type,
+            body: Box::new(body),
+            rest: Box::new(rest),
+            span,
+        })
     }
 
     fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {

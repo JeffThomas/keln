@@ -724,6 +724,183 @@ fn classify2 {
     }
 
     // =========================================================================
+    // Negative integer literals in expressions and match patterns
+    // =========================================================================
+
+    const NEG_LITERAL_SRC: &str = r#"
+fn sign {
+    Pure Int -> Int
+    in: n
+    out: match n {
+        -1 -> -10
+        0  -> 0
+        _  -> 1
+    }
+}
+
+fn negate_const {
+    Pure Int -> Int
+    in: n
+    out: n + -5
+}
+"#;
+
+    #[test]
+    fn test_negative_literal_in_pattern() {
+        assert_eq!(eval_fn(NEG_LITERAL_SRC, "sign", Value::Int(-1)), Ok(Value::Int(-10)));
+        assert_eq!(eval_fn(NEG_LITERAL_SRC, "sign", Value::Int(0)),  Ok(Value::Int(0)));
+        assert_eq!(eval_fn(NEG_LITERAL_SRC, "sign", Value::Int(5)),  Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_negative_literal_in_expression() {
+        assert_eq!(eval_fn(NEG_LITERAL_SRC, "negate_const", Value::Int(10)), Ok(Value::Int(5)));
+        assert_eq!(eval_fn(NEG_LITERAL_SRC, "negate_const", Value::Int(0)),  Ok(Value::Int(-5)));
+    }
+
+    // =========================================================================
+    // Named capturing helpers (closures)
+    // =========================================================================
+
+    const CAPTURING_HELPER_SRC: &str = r#"
+fn sum_with_offset {
+    Pure { items: List<Int>, offset: Int } -> Int
+    in: args
+    out:
+        let offset = args.offset in
+        let addOffset :: Pure { acc: Int, item: Int } -> Int =>
+            it.acc + it.item + offset
+        in
+        List.fold(args.items, 0, addOffset)
+}
+"#;
+
+    #[test]
+    fn test_capturing_helper_basic() {
+        let arg = Value::Record(vec![
+            ("items".to_string(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            ("offset".to_string(), Value::Int(10)),
+        ]);
+        assert_eq!(
+            eval_fn(CAPTURING_HELPER_SRC, "sum_with_offset", arg),
+            Ok(Value::Int(36)) // (1+10) + (2+10) + (3+10) = 36
+        );
+    }
+
+    const NESTED_CLOSURE_SRC: &str = r#"
+fn count_above {
+    Pure { items: List<Int>, cutoff: Int } -> Int
+    in: args
+    out:
+        let cutoff = args.cutoff in
+        let countStep :: Pure { acc: Int, item: Int } -> Int =>
+            match it.item > cutoff {
+                true  -> it.acc + 1
+                false -> it.acc
+            }
+        in
+        List.fold(args.items, 0, countStep)
+}
+"#;
+
+    #[test]
+    fn test_capturing_helper_with_match() {
+        let arg = Value::Record(vec![
+            ("items".to_string(), Value::List(vec![
+                Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(2),
+            ])),
+            ("cutoff".to_string(), Value::Int(3)),
+        ]);
+        assert_eq!(
+            eval_fn(NESTED_CLOSURE_SRC, "count_above", arg),
+            Ok(Value::Int(2)) // 5 and 8 are above 3
+        );
+    }
+
+    // =========================================================================
+    // Map.empty / Set.empty in value position (not call position)
+    // =========================================================================
+
+    const MAP_EMPTY_VALUE_SRC: &str = r#"
+fn make_empty_map {
+    Pure Unit -> Int
+    in: _
+    out:
+        let m = Map.empty in
+        let m2 = Map.insert(m, "a", 1) in
+        Map.size(m2)
+}
+
+fn empty_map_in_record {
+    Pure Unit -> Int
+    in: _
+    out:
+        let rec = { counts: Map.empty } in
+        let m2 = Map.insert(rec.counts, "x", 42) in
+        Map.size(m2)
+}
+"#;
+
+    #[test]
+    fn test_map_empty_in_let_binding() {
+        assert_eq!(eval_fn(MAP_EMPTY_VALUE_SRC, "make_empty_map", Value::Unit), Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_map_empty_in_record_field() {
+        assert_eq!(eval_fn(MAP_EMPTY_VALUE_SRC, "empty_map_in_record", Value::Unit), Ok(Value::Int(1)));
+    }
+
+    // =========================================================================
+    // Type aliases — `type Frac = {num: Int, den: Int}` field access
+    // =========================================================================
+
+    const TYPE_ALIAS_SRC: &str = r#"
+type Frac = { num: Int, den: Int }
+
+fn make_frac {
+    Pure { n: Int, d: Int } -> Int
+    in: args
+    out:
+        let f = { num: args.n, den: args.d } in
+        f.num + f.den
+}
+"#;
+
+    #[test]
+    fn test_type_alias_field_access() {
+        let arg = Value::Record(vec![
+            ("n".to_string(), Value::Int(3)),
+            ("d".to_string(), Value::Int(4)),
+        ]);
+        assert_eq!(eval_fn(TYPE_ALIAS_SRC, "make_frac", arg), Ok(Value::Int(7)));
+    }
+
+    // =========================================================================
+    // Naming error messages — uppercase identifier gives helpful suggestion
+    // =========================================================================
+
+    #[test]
+    fn test_naming_error_uppercase_suggests_lowercase() {
+        // Function name is uppercase — expect_lower_ident fires on the fn name
+        let src = r#"fn MyFunc { Pure Int -> Int in: n out: n }"#;
+        let result = eval_fn(src, "MyFunc", Value::Int(1));
+        let err = result.unwrap_err();
+        assert!(err.contains("must be lower_snake_case"), "expected helpful error, got: {}", err);
+        assert!(err.contains("did you mean"), "expected 'did you mean' suggestion, got: {}", err);
+        assert!(err.contains("my_func"), "expected suggestion 'my_func', got: {}", err);
+    }
+
+    #[test]
+    fn test_naming_error_reserved_keyword() {
+        // Function name is a reserved keyword — expect_lower_ident fires on the fn name
+        let src = r#"fn match { Pure Int -> Int in: n out: n }"#;
+        let result = eval_fn(src, "match", Value::Int(1));
+        let err = result.unwrap_err();
+        assert!(err.contains("reserved keyword"), "expected reserved keyword error, got: {}", err);
+    }
+
+    // =========================================================================
     // Regression 3: Lexer InputString truncation at 1024 characters.
     // Before the fix, lexxor::InputString silently truncated source to 1024
     // chars. Programs longer than that would fail to parse or lose definitions.
