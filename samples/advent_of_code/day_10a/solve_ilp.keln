@@ -1,0 +1,552 @@
+-- AoC Day 10a: Factory Part Two
+-- ILP solver: min sum(x) s.t. A*x = t, x >= 0 integer.
+-- Gaussian elimination + constraint propagation + DFS (ported from solve_ilp4.py).
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        List.fold(lines, 0, solveLine)
+
+    helpers: {
+
+        -- ── Fraction arithmetic ──────────────────────────────────────────────
+        -- Fractions {num, den} with den > 0 invariant maintained by fracMake.
+
+        gcd :: Pure {a: Int, b: Int} -> Int =>
+            match it.b == 0 {
+                true  -> Int.abs(it.a)
+                false -> gcd({a: it.b, b: it.a % it.b})
+            }
+
+        fracMake :: Pure {num: Int, den: Int} -> {num: Int, den: Int} =>
+            match it.num == 0 {
+                true  -> {num: 0, den: 1}
+                false ->
+                    let s = match it.den < 0 { true -> 0 - 1 false -> 1 } in
+                    let n = s * it.num in
+                    let d = s * it.den in
+                    let g = gcd({a: Int.abs(n), b: d}) in
+                    {num: n / g, den: d / g}
+            }
+
+        fracAdd :: Pure {a: {num: Int, den: Int}, b: {num: Int, den: Int}} -> {num: Int, den: Int} =>
+            fracMake({num: it.a.num * it.b.den + it.b.num * it.a.den, den: it.a.den * it.b.den})
+
+        fracSub :: Pure {a: {num: Int, den: Int}, b: {num: Int, den: Int}} -> {num: Int, den: Int} =>
+            fracMake({num: it.a.num * it.b.den - it.b.num * it.a.den, den: it.a.den * it.b.den})
+
+        fracMul :: Pure {a: {num: Int, den: Int}, b: {num: Int, den: Int}} -> {num: Int, den: Int} =>
+            fracMake({num: it.a.num * it.b.num, den: it.a.den * it.b.den})
+
+        fracDiv :: Pure {a: {num: Int, den: Int}, b: {num: Int, den: Int}} -> {num: Int, den: Int} =>
+            fracMake({num: it.a.num * it.b.den, den: it.a.den * it.b.num})
+
+        fracMulInt :: Pure {f: {num: Int, den: Int}, i: Int} -> {num: Int, den: Int} =>
+            fracMake({num: it.f.num * it.i, den: it.f.den})
+
+        fracNeg :: Pure {num: Int, den: Int} -> {num: Int, den: Int} =>
+            {num: 0 - it.num, den: it.den}
+
+        fracFloor :: Pure {num: Int, den: Int} -> Int =>
+            match it.num >= 0 {
+                true  -> it.num / it.den
+                false -> (it.num - it.den + 1) / it.den
+            }
+
+        fracIsZero :: Pure {num: Int, den: Int} -> Bool =>
+            it.num == 0
+
+        fracIsPos :: Pure {num: Int, den: Int} -> Bool =>
+            it.num > 0
+
+        fracIsNeg :: Pure {num: Int, den: Int} -> Bool =>
+            it.num < 0
+
+        fracIsInt :: Pure {num: Int, den: Int} -> Bool =>
+            it.num % it.den == 0
+
+        fracToInt :: Pure {num: Int, den: Int} -> Int =>
+            it.num / it.den
+
+        fracGeInt :: Pure {f: {num: Int, den: Int}, i: Int} -> Bool =>
+            it.f.num >= it.i * it.f.den
+
+        fracSumStep :: Pure {acc: {num: Int, den: Int}, item: {num: Int, den: Int}} -> {num: Int, den: Int} =>
+            fracAdd({a: it.acc, b: it.item})
+
+        -- ── Matrix helpers ────────────────────────────────────────────────────
+
+        getRow :: Pure {mat: List<List<{num: Int, den: Int}>>, r: Int} -> List<{num: Int, den: Int}> =>
+            Maybe.getOr(List.head(List.drop(it.mat, it.r)), [])
+
+        getElem :: Pure {row: List<{num: Int, den: Int}>, c: Int} -> {num: Int, den: Int} =>
+            Maybe.getOr(List.head(List.drop(it.row, it.c)), {num: 0, den: 1})
+
+        getIntElem :: Pure {lst: List<Int>, i: Int} -> Int =>
+            Maybe.getOr(List.head(List.drop(it.lst, it.i)), 0)
+
+        getFracRow :: Pure {mat: List<List<{num: Int, den: Int}>>, freeCols: List<Int>, r: Int} -> List<{num: Int, den: Int}> =>
+            let row = getRow({mat: it.mat, r: it.r}) in
+            List.fold(it.freeCols, {bRow: [], row: row}, getBElemStep).bRow
+
+        getBElemStep :: Pure {acc: {bRow: List<{num: Int, den: Int}>, row: List<{num: Int, den: Int}>}, item: Int} -> {bRow: List<{num: Int, den: Int}>, row: List<{num: Int, den: Int}>} =>
+            let val = getElem({row: it.acc.row, c: it.item}) in
+            {bRow: List.append(it.acc.bRow, val), row: it.acc.row}
+
+        scaleRowElem :: Pure {acc: {newRow: List<{num: Int, den: Int}>, scale: {num: Int, den: Int}}, item: {num: Int, den: Int}} -> {newRow: List<{num: Int, den: Int}>, scale: {num: Int, den: Int}} =>
+            {newRow: List.append(it.acc.newRow, fracMul({a: it.item, b: it.acc.scale})), scale: it.acc.scale}
+
+        scaleRow :: Pure {row: List<{num: Int, den: Int}>, scale: {num: Int, den: Int}} -> List<{num: Int, den: Int}> =>
+            List.fold(it.row, {newRow: [], scale: it.scale}, scaleRowElem).newRow
+
+        elimRowElem :: Pure {acc: {newRow: List<{num: Int, den: Int}>, factor: {num: Int, den: Int}}, item: {fst: {num: Int, den: Int}, snd: {num: Int, den: Int}}} -> {newRow: List<{num: Int, den: Int}>, factor: {num: Int, den: Int}} =>
+            let v = fracSub({a: it.item.fst, b: fracMul({a: it.acc.factor, b: it.item.snd})}) in
+            {newRow: List.append(it.acc.newRow, v), factor: it.acc.factor}
+
+        elimRow :: Pure {row: List<{num: Int, den: Int}>, pivRow: List<{num: Int, den: Int}>, factor: {num: Int, den: Int}} -> List<{num: Int, den: Int}> =>
+            List.fold(List.zip(it.row, it.pivRow), {newRow: [], factor: it.factor}, elimRowElem).newRow
+
+        swapRowsStep :: Pure {acc: {newMat: List<List<{num: Int, den: Int}>>, mat: List<List<{num: Int, den: Int}>>, i: Int, j: Int, ri: List<{num: Int, den: Int}>, rj: List<{num: Int, den: Int}>}, item: Int} -> {newMat: List<List<{num: Int, den: Int}>>, mat: List<List<{num: Int, den: Int}>>, i: Int, j: Int, ri: List<{num: Int, den: Int}>, rj: List<{num: Int, den: Int}>} =>
+            let row = match it.item == it.acc.i {
+                true  -> it.acc.rj
+                false ->
+                    match it.item == it.acc.j {
+                        true  -> it.acc.ri
+                        false -> getRow({mat: it.acc.mat, r: it.item})
+                    }
+            } in
+            {newMat: List.append(it.acc.newMat, row), mat: it.acc.mat, i: it.acc.i, j: it.acc.j, ri: it.acc.ri, rj: it.acc.rj}
+
+        swapRows :: Pure {mat: List<List<{num: Int, den: Int}>>, i: Int, j: Int, nrows: Int} -> List<List<{num: Int, den: Int}>> =>
+            let ri = getRow({mat: it.mat, r: it.i}) in
+            let rj = getRow({mat: it.mat, r: it.j}) in
+            List.fold(List.range(0, it.nrows), {newMat: [], mat: it.mat, i: it.i, j: it.j, ri: ri, rj: rj}, swapRowsStep).newMat
+
+        elimAllRowsStep :: Pure {acc: {newMat: List<List<{num: Int, den: Int}>>, pivRow: List<{num: Int, den: Int}>, pr: Int, pc: Int, mat: List<List<{num: Int, den: Int}>>}, item: Int} -> {newMat: List<List<{num: Int, den: Int}>>, pivRow: List<{num: Int, den: Int}>, pr: Int, pc: Int, mat: List<List<{num: Int, den: Int}>>} =>
+            let rr = it.item in
+            let row = getRow({mat: it.acc.mat, r: rr}) in
+            let newRow = match rr == it.acc.pr {
+                true  -> it.acc.pivRow
+                false ->
+                    let fac = getElem({row: row, c: it.acc.pc}) in
+                    match fracIsZero(fac) {
+                        true  -> row
+                        false -> elimRow({row: row, pivRow: it.acc.pivRow, factor: fac})
+                    }
+            } in
+            {newMat: List.append(it.acc.newMat, newRow), pivRow: it.acc.pivRow, pr: it.acc.pr, pc: it.acc.pc, mat: it.acc.mat}
+
+        -- ── Gaussian elimination ─────────────────────────────────────────────
+
+        findPivotStep :: Pure {acc: {found: Int, col: Int, mat: List<List<{num: Int, den: Int}>>}, item: Int} -> {found: Int, col: Int, mat: List<List<{num: Int, den: Int}>>} =>
+            match it.acc.found >= 0 {
+                true  -> it.acc
+                false ->
+                    let row = getRow({mat: it.acc.mat, r: it.item}) in
+                    let v   = getElem({row: row, c: it.acc.col}) in
+                    match fracIsZero(v) {
+                        true  -> it.acc
+                        false -> {found: it.item, col: it.acc.col, mat: it.acc.mat}
+                    }
+            }
+
+        gaussCol :: Pure {acc: {mat: List<List<{num: Int, den: Int}>>, r: Int, pivMap: Map<Int, Int>, k: Int, m: Int}, item: Int} -> {mat: List<List<{num: Int, den: Int}>>, r: Int, pivMap: Map<Int, Int>, k: Int, m: Int} =>
+            let c   = it.item in
+            let mat = it.acc.mat in
+            let r   = it.acc.r in
+            let m   = it.acc.m in
+            let k   = it.acc.k in
+            match r >= m {
+                true  -> it.acc
+                false ->
+                    let fa  = List.fold(List.range(r, m), {found: 0 - 1, col: c, mat: mat}, findPivotStep) in
+                    match fa.found == 0 - 1 {
+                        true  -> it.acc
+                        false ->
+                            let mat2 = match fa.found == r {
+                                true  -> mat
+                                false -> swapRows({mat: mat, i: r, j: fa.found, nrows: m})
+                            } in
+                            let pivRow  = getRow({mat: mat2, r: r}) in
+                            let pivVal  = getElem({row: pivRow, c: c}) in
+                            let invPiv  = fracDiv({a: {num: 1, den: 1}, b: pivVal}) in
+                            let sRow    = scaleRow({row: pivRow, scale: invPiv}) in
+                            let elim    = List.fold(List.range(0, m), {newMat: [], pivRow: sRow, pr: r, pc: c, mat: mat2}, elimAllRowsStep) in
+                            {mat: elim.newMat, r: r + 1, pivMap: Map.insert(it.acc.pivMap, c, r), k: k, m: m}
+                    }
+            }
+
+        gaussElim :: Pure {mat: List<List<{num: Int, den: Int}>>, k: Int, m: Int} -> {mat: List<List<{num: Int, den: Int}>>, pivMap: Map<Int, Int>, rank: Int} =>
+            let res = List.fold(List.range(0, it.k), {mat: it.mat, r: 0, pivMap: Map.fromList([]), k: it.k, m: it.m}, gaussCol) in
+            {mat: res.mat, pivMap: res.pivMap, rank: res.r}
+
+        -- ── Build ILP components ─────────────────────────────────────────────
+
+        buildMatRowElems :: Pure {acc: {row: List<{num: Int, den: Int}>, i: Int}, item: List<Int>} -> {row: List<{num: Int, den: Int}>, i: Int} =>
+            let v = Maybe.getOr(List.head(List.drop(it.item, it.acc.i)), 0) in
+            {row: List.append(it.acc.row, {num: v, den: 1}), i: it.acc.i}
+
+        buildMatRow :: Pure {acc: {rows: List<List<{num: Int, den: Int}>>, buttons: List<List<Int>>, t: List<Int>}, item: Int} -> {rows: List<List<{num: Int, den: Int}>>, buttons: List<List<Int>>, t: List<Int>} =>
+            let i      = it.item in
+            let ti     = Maybe.getOr(List.head(List.drop(it.acc.t, i)), 0) in
+            let rAcc   = List.fold(it.acc.buttons, {row: [], i: i}, buildMatRowElems) in
+            let row    = List.append(rAcc.row, {num: ti, den: 1}) in
+            {rows: List.append(it.acc.rows, row), buttons: it.acc.buttons, t: it.acc.t}
+
+        freeColsStep :: Pure {acc: {cols: List<Int>, pivMap: Map<Int, Int>}, item: Int} -> {cols: List<Int>, pivMap: Map<Int, Int>} =>
+            match Map.contains(it.acc.pivMap, it.item) {
+                true  -> it.acc
+                false -> {cols: List.append(it.acc.cols, it.item), pivMap: it.acc.pivMap}
+            }
+
+        getBRowsStep :: Pure {acc: {bRows: List<List<{num: Int, den: Int}>>, mat: List<List<{num: Int, den: Int}>>, freeCols: List<Int>}, item: Int} -> {bRows: List<List<{num: Int, den: Int}>>, mat: List<List<{num: Int, den: Int}>>, freeCols: List<Int>} =>
+            let bRow = getFracRow({mat: it.acc.mat, freeCols: it.acc.freeCols, r: it.item}) in
+            {bRows: List.append(it.acc.bRows, bRow), mat: it.acc.mat, freeCols: it.acc.freeCols}
+
+        getBColSumStep :: Pure {acc: {sum: {num: Int, den: Int}, j: Int, bRows: List<List<{num: Int, den: Int}>>}, item: Int} -> {sum: {num: Int, den: Int}, j: Int, bRows: List<List<{num: Int, den: Int}>>} =>
+            let bRow = Maybe.getOr(List.head(List.drop(it.acc.bRows, it.item)), []) in
+            let v    = getElem({row: bRow, c: it.acc.j}) in
+            {sum: fracAdd({a: it.acc.sum, b: v}), j: it.acc.j, bRows: it.acc.bRows}
+
+        getObjCoeffStep :: Pure {acc: {obj: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, rank: Int}, item: Int} -> {obj: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, rank: Int} =>
+            let j    = it.item in
+            let sAcc = List.fold(List.range(0, it.acc.rank), {sum: {num: 0, den: 1}, j: j, bRows: it.acc.bRows}, getBColSumStep) in
+            let coef = fracSub({a: {num: 1, den: 1}, b: sAcc.sum}) in
+            {obj: List.append(it.acc.obj, coef), bRows: it.acc.bRows, rank: it.acc.rank}
+
+        -- ── Constraint propagation ───────────────────────────────────────────
+
+        updateIntListStep :: Pure {acc: {newLst: List<Int>, idx: Int, val: Int}, item: {fst: Int, snd: Int}} -> {newLst: List<Int>, idx: Int, val: Int} =>
+            let e = match it.item.fst == it.acc.idx { true -> it.acc.val false -> it.item.snd } in
+            {newLst: List.append(it.acc.newLst, e), idx: it.acc.idx, val: it.acc.val}
+
+        updateIntList :: Pure {lst: List<Int>, idx: Int, val: Int} -> List<Int> =>
+            List.fold(List.zip(List.range(0, List.len(it.lst)), it.lst), {newLst: [], idx: it.idx, val: it.val}, updateIntListStep).newLst
+
+        cpMaxNumStep :: Pure {acc: {mx: {num: Int, den: Int}, j0: Int, bRow: List<{num: Int, den: Int}>, ubg: List<Int>}, item: Int} -> {mx: {num: Int, den: Int}, j0: Int, bRow: List<{num: Int, den: Int}>, ubg: List<Int>} =>
+            let jj = it.item in
+            match jj == it.acc.j0 {
+                true  -> it.acc
+                false ->
+                    let bv = getElem({row: it.acc.bRow, c: jj}) in
+                    match fracIsNeg(bv) {
+                        false -> it.acc
+                        true  ->
+                            let ug  = getIntElem({lst: it.acc.ubg, i: jj}) in
+                            let neg = fracNeg(bv) in
+                            let add = fracMulInt({f: neg, i: ug}) in
+                            {mx: fracAdd({a: it.acc.mx, b: add}), j0: it.acc.j0, bRow: it.acc.bRow, ubg: it.acc.ubg}
+                    }
+            }
+
+        cpInnerStep :: Pure {acc: {ubg: List<Int>, changed: Bool, j0: Int, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>}, item: Int} -> {ubg: List<Int>, changed: Bool, j0: Int, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>} =>
+            let r    = it.item in
+            let bRow = Maybe.getOr(List.head(List.drop(it.acc.bRows, r)), []) in
+            let bv0  = getElem({row: bRow, c: it.acc.j0}) in
+            match fracIsPos(bv0) {
+                false -> it.acc
+                true  ->
+                    let rhs_r  = Maybe.getOr(List.head(List.drop(it.acc.rhs, r)), {num: 0, den: 1}) in
+                    let mnAcc  = List.fold(List.range(0, it.acc.nd), {mx: rhs_r, j0: it.acc.j0, bRow: bRow, ubg: it.acc.ubg}, cpMaxNumStep) in
+                    let new_ub = fracFloor(fracDiv({a: mnAcc.mx, b: bv0})) in
+                    let cur_ub = getIntElem({lst: it.acc.ubg, i: it.acc.j0}) in
+                    match new_ub < cur_ub {
+                        false -> it.acc
+                        true  ->
+                            let newUbg = updateIntList({lst: it.acc.ubg, idx: it.acc.j0, val: new_ub}) in
+                            {ubg: newUbg, changed: true, j0: it.acc.j0, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs}
+                    }
+            }
+
+        cpOuterStep :: Pure {acc: {ubg: List<Int>, changed: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>}, item: Int} -> {ubg: List<Int>, changed: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>} =>
+            let j0  = it.item in
+            let res = List.fold(List.range(0, it.acc.rank), {ubg: it.acc.ubg, changed: it.acc.changed, j0: j0, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs}, cpInnerStep) in
+            {ubg: res.ubg, changed: res.changed, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs}
+
+        cpPassStep :: Pure {acc: {ubg: List<Int>, changed: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>}, item: Int} -> {ubg: List<Int>, changed: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>} =>
+            let init = {ubg: it.acc.ubg, changed: false, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs} in
+            let res  = List.fold(List.range(0, it.acc.nd), init, cpOuterStep) in
+            {ubg: res.ubg, changed: res.changed, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs}
+
+        cpDone :: Pure {ubg: List<Int>, changed: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>} -> Bool =>
+            Bool.not(it.changed)
+
+        -- ── minObjTail: min remaining obj from position j onwards (for pruning) ──
+        -- minObjTail[j] = sum(min(0, objCoeff[jj]*ubg[jj]) for jj in j..nd-1)
+        -- Since we enumerate ascending when coeff>=0 (F[j]=0 is best contrib),
+        -- and descending when coeff<0 (F[j]=ubg[j] is best but we prune if sum>=best),
+        -- the lower bound on remaining contribution from j..nd-1 is:
+        --   sum(objCoeff[jj]*ubg[jj] for coeff[jj]<0, jj>=j)
+        buildMinObjTailStep :: Pure {acc: {tails: List<{num: Int, den: Int}>, running: {num: Int, den: Int}, obj: List<{num: Int, den: Int}>, ubg: List<Int>}, item: Int} -> {tails: List<{num: Int, den: Int}>, running: {num: Int, den: Int}, obj: List<{num: Int, den: Int}>, ubg: List<Int>} =>
+            let jj   = it.item in
+            let coef = Maybe.getOr(List.head(List.drop(it.acc.obj, jj)), {num: 0, den: 1}) in
+            let ug   = getIntElem({lst: it.acc.ubg, i: jj}) in
+            let contrib = match fracIsNeg(coef) {
+                true  -> fracMulInt({f: coef, i: ug})
+                false -> {num: 0, den: 1}
+            } in
+            let newRun = fracAdd({a: it.acc.running, b: contrib}) in
+            {tails: List.append(it.acc.tails, newRun), running: newRun, obj: it.acc.obj, ubg: it.acc.ubg}
+
+        -- ── DFS leaf check ───────────────────────────────────────────────────
+
+        checkLeafRow :: Pure {acc: {total: Int, valid: Bool, bRow: List<{num: Int, den: Int}>, fvals: List<Int>}, item: {fst: Int, snd: {num: Int, den: Int}}} -> {total: Int, valid: Bool, bRow: List<{num: Int, den: Int}>, fvals: List<Int>} =>
+            match it.acc.valid {
+                false -> it.acc
+                true  ->
+                    let fj  = it.item.fst in
+                    let rhs = it.item.snd in
+                    let bv  = getElem({row: it.acc.bRow, c: fj}) in
+                    let sub = fracMulInt({f: bv, i: getIntElem({lst: it.acc.fvals, i: fj})}) in
+                    {total: it.acc.total, valid: it.acc.valid, bRow: it.acc.bRow, fvals: it.acc.fvals}
+            }
+
+        computePivotVal :: Pure {acc: {val: {num: Int, den: Int}, bRow: List<{num: Int, den: Int}>, fvals: List<Int>}, item: Int} -> {val: {num: Int, den: Int}, bRow: List<{num: Int, den: Int}>, fvals: List<Int>} =>
+            let j   = it.item in
+            let bv  = getElem({row: it.acc.bRow, c: j}) in
+            let fj  = getIntElem({lst: it.acc.fvals, i: j}) in
+            let sub = fracMulInt({f: bv, i: fj}) in
+            {val: fracSub({a: it.acc.val, b: sub}), bRow: it.acc.bRow, fvals: it.acc.fvals}
+
+        checkLeafRowR :: Pure {acc: {total: Int, valid: Bool, rhs: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, nd: Int, fvals: List<Int>}, item: Int} -> {total: Int, valid: Bool, rhs: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, nd: Int, fvals: List<Int>} =>
+            match it.acc.valid {
+                false -> it.acc
+                true  ->
+                    let r    = it.item in
+                    let bRow = Maybe.getOr(List.head(List.drop(it.acc.bRows, r)), []) in
+                    let rhs_r = Maybe.getOr(List.head(List.drop(it.acc.rhs, r)), {num: 0, den: 1}) in
+                    let pvAcc = List.fold(List.range(0, it.acc.nd), {val: rhs_r, bRow: bRow, fvals: it.acc.fvals}, computePivotVal) in
+                    let pv   = pvAcc.val in
+                    match Bool.or(fracIsNeg(pv), Bool.not(fracIsInt(pv))) {
+                        true  -> {total: it.acc.total, valid: false, rhs: it.acc.rhs, bRows: it.acc.bRows, nd: it.acc.nd, fvals: it.acc.fvals}
+                        false -> {total: it.acc.total + fracToInt(pv), valid: true, rhs: it.acc.rhs, bRows: it.acc.bRows, nd: it.acc.nd, fvals: it.acc.fvals}
+                    }
+            }
+
+        -- ── DFS upper bound for fj ───────────────────────────────────────────
+
+        computePartialRhsStep :: Pure {acc: {prhs: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, fvals: List<Int>, jStop: Int}, item: Int} -> {prhs: List<{num: Int, den: Int}>, bRows: List<List<{num: Int, den: Int}>>, fvals: List<Int>, jStop: Int} =>
+            let r    = it.item in
+            let bRow = Maybe.getOr(List.head(List.drop(it.acc.bRows, r)), []) in
+            let rhs_r = Maybe.getOr(List.head(List.drop(it.acc.prhs, r)), {num: 0, den: 1}) in
+            let sub  = List.fold(List.range(0, it.acc.jStop), {val: {num: 0, den: 1}, bRow: bRow, fvals: it.acc.fvals}, computePartialBFStep) in
+            let newv = fracSub({a: rhs_r, b: sub.val}) in
+            {prhs: List.append(List.take(it.acc.prhs, r), List.prepend(newv, List.drop(it.acc.prhs, r + 1))), bRows: it.acc.bRows, fvals: it.acc.fvals, jStop: it.acc.jStop}
+
+        computePartialBFStep :: Pure {acc: {val: {num: Int, den: Int}, bRow: List<{num: Int, den: Int}>, fvals: List<Int>}, item: Int} -> {val: {num: Int, den: Int}, bRow: List<{num: Int, den: Int}>, fvals: List<Int>} =>
+            let j   = it.item in
+            let bv  = getElem({row: it.acc.bRow, c: j}) in
+            let fj  = getIntElem({lst: it.acc.fvals, i: j}) in
+            {val: fracAdd({a: it.acc.val, b: fracMulInt({f: bv, i: fj})}), bRow: it.acc.bRow, fvals: it.acc.fvals}
+
+        dfsUbMaxNumStep :: Pure {acc: {mx: {num: Int, den: Int}, j: Int, bRow: List<{num: Int, den: Int}>, ubg: List<Int>}, item: Int} -> {mx: {num: Int, den: Int}, j: Int, bRow: List<{num: Int, den: Int}>, ubg: List<Int>} =>
+            let jj = it.item in
+            match jj <= it.acc.j {
+                true  -> it.acc
+                false ->
+                    let bv = getElem({row: it.acc.bRow, c: jj}) in
+                    match fracIsNeg(bv) {
+                        false -> it.acc
+                        true  ->
+                            let ug  = getIntElem({lst: it.acc.ubg, i: jj}) in
+                            let neg = fracNeg(bv) in
+                            {mx: fracAdd({a: it.acc.mx, b: fracMulInt({f: neg, i: ug})}), j: it.acc.j, bRow: it.acc.bRow, ubg: it.acc.ubg}
+                    }
+            }
+
+        dfsComputeUbJRank :: Pure {acc: {ubJ: Int, j: Int, nd: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>, fvals: List<Int>, ubg: List<Int>}, item: Int} -> {ubJ: Int, j: Int, nd: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>, fvals: List<Int>, ubg: List<Int>} =>
+            let r    = it.item in
+            let bRow = Maybe.getOr(List.head(List.drop(it.acc.bRows, r)), []) in
+            let bvJ  = getElem({row: bRow, c: it.acc.j}) in
+            match fracIsPos(bvJ) {
+                false -> it.acc
+                true  ->
+                    let rhs_r = Maybe.getOr(List.head(List.drop(it.acc.rhs, r)), {num: 0, den: 1}) in
+                    let pBF   = List.fold(List.range(0, it.acc.j), {val: {num: 0, den: 1}, bRow: bRow, fvals: it.acc.fvals}, computePartialBFStep) in
+                    let prhs  = fracSub({a: rhs_r, b: pBF.val}) in
+                    let mnAcc = List.fold(List.range(0, it.acc.nd), {mx: prhs, j: it.acc.j, bRow: bRow, ubg: it.acc.ubg}, dfsUbMaxNumStep) in
+                    let newUb = fracFloor(fracDiv({a: mnAcc.mx, b: bvJ})) in
+                    {ubJ: Int.min(it.acc.ubJ, newUb), j: it.acc.j, nd: it.acc.nd, bRows: it.acc.bRows, rhs: it.acc.rhs, fvals: it.acc.fvals, ubg: it.acc.ubg}
+            }
+
+        -- ── DFS fj loop step ─────────────────────────────────────────────────
+
+        dfsFjStep :: Pure {acc: {best: Int, bestSet: Bool, j: Int, fvals: List<Int>, partialObj: {num: Int, den: Int}, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>, obj: List<{num: Int, den: Int}>, ubg: List<Int>, minObjTail: List<{num: Int, den: Int}>}, item: Int} -> {best: Int, bestSet: Bool, j: Int, fvals: List<Int>, partialObj: {num: Int, den: Int}, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>, obj: List<{num: Int, den: Int}>, ubg: List<Int>, minObjTail: List<{num: Int, den: Int}>} =>
+            let fj      = it.item in
+            let coefJ   = Maybe.getOr(List.head(List.drop(it.acc.obj, it.acc.j)), {num: 0, den: 1}) in
+            let newPO   = fracAdd({a: it.acc.partialObj, b: fracMulInt({f: coefJ, i: fj})}) in
+            let minRem  = Maybe.getOr(List.head(List.drop(it.acc.minObjTail, it.acc.j + 1)), {num: 0, den: 1}) in
+            let pruned  = Bool.and(it.acc.bestSet, fracGeInt({f: fracAdd({a: newPO, b: minRem}), i: it.acc.best})) in
+            match pruned {
+                true  -> it.acc
+                false ->
+                    let newF    = List.append(it.acc.fvals, fj) in
+                    let subRes  = dfs({j: it.acc.j + 1, fvals: newF, partialObj: newPO, best: it.acc.best, bestSet: it.acc.bestSet, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs, obj: it.acc.obj, ubg: it.acc.ubg, minObjTail: it.acc.minObjTail}) in
+                    {best: subRes.best, bestSet: subRes.bestSet, j: it.acc.j, fvals: it.acc.fvals, partialObj: it.acc.partialObj, nd: it.acc.nd, rank: it.acc.rank, bRows: it.acc.bRows, rhs: it.acc.rhs, obj: it.acc.obj, ubg: it.acc.ubg, minObjTail: it.acc.minObjTail}
+            }
+
+        -- ── DFS main ─────────────────────────────────────────────────────────
+
+        dfs :: Pure {j: Int, fvals: List<Int>, partialObj: {num: Int, den: Int}, best: Int, bestSet: Bool, nd: Int, rank: Int, bRows: List<List<{num: Int, den: Int}>>, rhs: List<{num: Int, den: Int}>, obj: List<{num: Int, den: Int}>, ubg: List<Int>, minObjTail: List<{num: Int, den: Int}>} -> {best: Int, bestSet: Bool} =>
+            let minRemJ = Maybe.getOr(List.head(List.drop(it.minObjTail, it.j)), {num: 0, den: 1}) in
+            let prune0  = Bool.and(it.bestSet, fracGeInt({f: fracAdd({a: it.partialObj, b: minRemJ}), i: it.best})) in
+            match prune0 {
+                true  -> {best: it.best, bestSet: it.bestSet}
+                false ->
+                    match it.j == it.nd {
+                        true  ->
+                            let leafAcc = List.fold(List.range(0, it.rank), {total: 0, valid: true, rhs: it.rhs, bRows: it.bRows, nd: it.nd, fvals: it.fvals}, checkLeafRowR) in
+                            match leafAcc.valid {
+                                false -> {best: it.best, bestSet: it.bestSet}
+                                true  ->
+                                    let total = leafAcc.total + List.fold(it.fvals, 0, sumIntStep) in
+                                    match Bool.or(Bool.not(it.bestSet), total < it.best) {
+                                        true  -> {best: total, bestSet: true}
+                                        false -> {best: it.best, bestSet: it.bestSet}
+                                    }
+                            }
+                        false ->
+                            let ubAcc = List.fold(List.range(0, it.rank), {ubJ: getIntElem({lst: it.ubg, i: it.j}), j: it.j, nd: it.nd, bRows: it.bRows, rhs: it.rhs, fvals: it.fvals, ubg: it.ubg}, dfsComputeUbJRank) in
+                            let ubJ   = ubAcc.ubJ in
+                            match ubJ < 0 {
+                                true  -> {best: it.best, bestSet: it.bestSet}
+                                false ->
+                                    let coefJ  = Maybe.getOr(List.head(List.drop(it.obj, it.j)), {num: 0, den: 1}) in
+                                    let rng    = match fracIsNeg(coefJ) {
+                                        true  -> List.reverse(List.range(0, ubJ + 1))
+                                        false -> List.range(0, ubJ + 1)
+                                    } in
+                                    let loopAcc = {best: it.best, bestSet: it.bestSet, j: it.j, fvals: it.fvals, partialObj: it.partialObj, nd: it.nd, rank: it.rank, bRows: it.bRows, rhs: it.rhs, obj: it.obj, ubg: it.ubg, minObjTail: it.minObjTail} in
+                                    let res = List.fold(rng, loopAcc, dfsFjStep) in
+                                    {best: res.best, bestSet: res.bestSet}
+                            }
+                    }
+            }
+
+        sumIntStep :: Pure {acc: Int, item: Int} -> Int =>
+            it.acc + it.item
+
+        -- ── ILP solver ───────────────────────────────────────────────────────
+
+        checkConsistency :: Pure {acc: Bool, item: List<{num: Int, den: Int}>} -> Bool =>
+            match it.acc {
+                false -> false
+                true  ->
+                    let rhs = Maybe.getOr(List.head(List.reverse(it.item)), {num: 0, den: 1}) in
+                    fracIsZero(rhs)
+            }
+
+        solveILP :: Pure {buttons: List<List<Int>>, t: List<Int>, k: Int, m: Int} -> Int =>
+            let k       = it.k in
+            let m       = it.m in
+            let buttons = it.buttons in
+            let t       = it.t in
+            let matAcc  = List.fold(List.range(0, m), {rows: [], buttons: buttons, t: t}, buildMatRow) in
+            let initMat = matAcc.rows in
+            let gRes    = gaussElim({mat: initMat, k: k, m: m}) in
+            let rank    = gRes.rank in
+            let elMat   = gRes.mat in
+            let pivMap  = gRes.pivMap in
+            let tailRows = List.drop(elMat, rank) in
+            let consistent = List.fold(tailRows, true, checkConsistency) in
+            match consistent {
+                false -> 0
+                true  ->
+                    let fcAcc    = List.fold(List.range(0, k), {cols: [], pivMap: pivMap}, freeColsStep) in
+                    let freeCols = fcAcc.cols in
+                    let nd       = List.len(freeCols) in
+                    let rhsAcc   = List.fold(List.range(0, rank), {rhs: [], mat: elMat}, getRhsStep) in
+                    let rhs      = rhsAcc.rhs in
+                    let bRowsAcc = List.fold(List.range(0, rank), {bRows: [], mat: elMat, freeCols: freeCols}, getBRowsStep) in
+                    let bRows    = bRowsAcc.bRows in
+                    let objAcc   = List.fold(List.range(0, nd), {obj: [], bRows: bRows, rank: rank}, getObjCoeffStep) in
+                    let obj      = objAcc.obj in
+                    let rhsSum   = List.fold(rhs, {num: 0, den: 1}, fracSumStep) in
+                    match nd == 0 {
+                        true  ->
+                            let validAcc = List.fold(rhs, {total: 0, valid: true}, checkRhsStep) in
+                            match validAcc.valid { true -> validAcc.total false -> 0 }
+                        false ->
+                            let tSum = List.fold(t, 0, sumIntStep) in
+                            let tMax = List.fold(t, 0, maxIntStep) in
+                            let inf  = tSum + tMax + 1 in
+                            let ubg  = List.repeat(inf, nd) in
+                            let cpInit = {ubg: ubg, changed: true, nd: nd, rank: rank, bRows: bRows, rhs: rhs} in
+                            let ubg2   = List.foldUntil(List.range(0, 200), cpInit, cpPassStep, cpDone).ubg in
+                            let anyNeg = List.fold(List.zip(List.range(0, nd), ubg2), false, checkUbgNeg) in
+                            match anyNeg {
+                                true  -> 0
+                                false ->
+                                    let tailInit = {tails: [], running: {num: 0, den: 1}, obj: obj, ubg: ubg2} in
+                                    let tailRes  = List.fold(List.range(0, nd), tailInit, buildMinObjTailStep) in
+                                    let minObjTailFwd = tailRes.tails in
+                                    let minObjTail = List.append(minObjTailFwd, {num: 0, den: 1}) in
+                                    let dfsInit = {j: 0, fvals: [], partialObj: rhsSum, best: 0, bestSet: false, nd: nd, rank: rank, bRows: bRows, rhs: rhs, obj: obj, ubg: ubg2, minObjTail: minObjTail} in
+                                    let dfsRes  = dfs(dfsInit) in
+                                    match dfsRes.bestSet { true -> dfsRes.best false -> 0 }
+                            }
+                    }
+            }
+
+        checkRhsStep :: Pure {acc: {total: Int, valid: Bool}, item: {num: Int, den: Int}} -> {total: Int, valid: Bool} =>
+            match it.acc.valid {
+                false -> it.acc
+                true  ->
+                    match Bool.or(fracIsNeg(it.item), Bool.not(fracIsInt(it.item))) {
+                        true  -> {total: it.acc.total, valid: false}
+                        false -> {total: it.acc.total + fracToInt(it.item), valid: true}
+                    }
+            }
+
+        getRhsStep :: Pure {acc: {rhs: List<{num: Int, den: Int}>, mat: List<List<{num: Int, den: Int}>>}, item: Int} -> {rhs: List<{num: Int, den: Int}>, mat: List<List<{num: Int, den: Int}>>} =>
+            let row = getRow({mat: it.acc.mat, r: it.item}) in
+            let v   = Maybe.getOr(List.head(List.reverse(row)), {num: 0, den: 1}) in
+            {rhs: List.append(it.acc.rhs, v), mat: it.acc.mat}
+
+        maxIntStep :: Pure {acc: Int, item: Int} -> Int =>
+            Int.max(it.acc, it.item)
+
+        checkUbgNeg :: Pure {acc: Bool, item: {fst: Int, snd: Int}} -> Bool =>
+            Bool.or(it.acc, it.item.snd < 0)
+
+        -- ── Input parsing ────────────────────────────────────────────────────
+
+        parseIndex :: Pure String -> Int =>
+            Result.unwrapOr(Int.parse(String.trim(it)), 0)
+
+        isNonEmpty :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        makeMaskBit :: Pure {acc: {mask: List<Int>, indices: List<Int>}, item: Int} -> {mask: List<Int>, indices: List<Int>} =>
+            let bit = match List.contains(it.acc.indices, it.item) { true -> 1 false -> 0 } in
+            {mask: List.append(it.acc.mask, bit), indices: it.acc.indices}
+
+        parseButtonMask :: Pure {acc: {masks: List<List<Int>>, n: Int}, item: String} -> {masks: List<List<Int>>, n: Int} =>
+            let afterParen = Maybe.getOr(List.head(List.tail(String.split(String.trim(it.item), "("))), "") in
+            let indices    = List.map(String.split(afterParen, ","), parseIndex) in
+            let maskAcc    = List.fold(List.range(0, it.acc.n), {mask: [], indices: indices}, makeMaskBit) in
+            {masks: List.append(it.acc.masks, maskAcc.mask), n: it.acc.n}
+
+        solveLine :: Pure {acc: Int, item: String} -> Int =>
+            let parts1        = String.split(it.item, "{") in
+            let btnStr        = Maybe.getOr(List.head(parts1), "") in
+            let joltWithClose = Maybe.getOr(List.head(List.tail(parts1)), "") in
+            let joltStr       = Maybe.getOr(List.head(String.split(joltWithClose, "}")), "") in
+            let t             = List.map(String.split(joltStr, ","), parseIndex) in
+            let m             = List.len(t) in
+            let btnParts      = List.filter(String.split(btnStr, ")"), isNonEmpty) in
+            let bAcc          = List.fold(btnParts, {masks: [], n: m}, parseButtonMask) in
+            let buttons       = bAcc.masks in
+            let k             = List.len(buttons) in
+            let ans           = solveILP({buttons: buttons, t: t, k: k, m: m}) in
+            it.acc + ans
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_10a/example.txt") -> 33
+        given("samples/advent_of_code/day_10a/input.txt") -> 20709
+    }
+}

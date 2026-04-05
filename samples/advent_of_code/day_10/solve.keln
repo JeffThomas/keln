@@ -1,0 +1,105 @@
+-- AoC Day 10: Factory
+--
+-- Each machine: target light state [.##.], toggle buttons (0,2,3), joltage (ignored).
+-- Find minimum total button presses across all machines.
+--
+-- This is GF(2) linear algebra: find min-weight x ∈ {0,1}^k s.t. A·x = t (mod 2).
+-- Brute force: enumerate all 2^k subsets of buttons (k ≤ 13), XOR their masks,
+-- compare to target. Track minimum popcount over matching subsets.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        List.fold(lines, 0, solveLine)
+
+    helpers: {
+        -- Parse '#' as 1, '.' as 0
+        charToBit :: Pure String -> Int =>
+            match it == "#" {
+                true  -> 1
+                false -> 0
+            }
+
+        -- Parse a trimmed index string to Int
+        parseIndex :: Pure String -> Int =>
+            Result.unwrapOr(Int.parse(String.trim(it)), 0)
+
+        -- 2^i
+        pow2 :: Pure Int -> Int =>
+            Int.pow(2, it)
+
+        -- Keep non-whitespace-only strings
+        isNonEmpty :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        -- Fold step: build a bitmask by checking each position
+        makeMaskBit :: Pure { acc: { mask: List<Int>, indices: List<Int> }, item: Int } -> { mask: List<Int>, indices: List<Int> } =>
+            let bit = match List.contains(it.acc.indices, it.item) {
+                          true  -> 1
+                          false -> 0
+                      } in
+            { mask: List.append(it.acc.mask, bit), indices: it.acc.indices }
+
+        -- Parse one button string like " (0,2,3" into a mask of length n
+        parseButtonMask :: Pure { acc: { masks: List<List<Int>>, n: Int }, item: String } -> { masks: List<List<Int>>, n: Int } =>
+            let afterParen = Maybe.getOr(List.head(List.tail(String.split(String.trim(it.item), "("))), "") in
+            let indices    = List.map(String.split(afterParen, ","), parseIndex) in
+            let maskAcc    = List.fold(List.range(0, it.acc.n), { mask: [], indices: indices }, makeMaskBit) in
+            { masks: List.append(it.acc.masks, maskAcc.mask), n: it.acc.n }
+
+        -- XOR a pair of bits: (a+b)%2
+        xorPair :: Pure { fst: Int, snd: Int } -> Int =>
+            (it.fst + it.snd) % 2
+
+        -- XOR two equal-length state lists
+        xorStates :: Pure { a: List<Int>, b: List<Int> } -> List<Int> =>
+            List.map(List.zip(it.a, it.b), xorPair)
+
+        -- Inner fold step: for subset s, XOR in button i if bit i is set
+        subsetStep :: Pure { acc: { state: List<Int>, pop: Int, s: Int }, item: { fst: Int, snd: List<Int> } } -> { state: List<Int>, pop: Int, s: Int } =>
+            let bit = (it.acc.s / it.item.fst) % 2 in
+            match bit == 1 {
+                false -> it.acc
+                true  ->
+                    { state: xorStates({ a: it.acc.state, b: it.item.snd }),
+                      pop:   it.acc.pop + 1,
+                      s:     it.acc.s }
+            }
+
+        -- Outer fold step: check subset s against target, update minPop
+        checkSubset :: Pure { acc: { minPop: Int, powBtns: List<{ fst: Int, snd: List<Int> }>, target: List<Int>, zero: List<Int> }, item: Int } -> { minPop: Int, powBtns: List<{ fst: Int, snd: List<Int> }>, target: List<Int>, zero: List<Int> } =>
+            let s      = it.item in
+            let r      = List.fold(it.acc.powBtns, { state: it.acc.zero, pop: 0, s: s }, subsetStep) in
+            match r.state == it.acc.target {
+                false -> it.acc
+                true  ->
+                    match r.pop < it.acc.minPop {
+                        true  -> { minPop: r.pop, powBtns: it.acc.powBtns, target: it.acc.target, zero: it.acc.zero }
+                        false -> it.acc
+                    }
+            }
+
+        -- Parse and solve one machine line
+        solveLine :: Pure { acc: Int, item: String } -> Int =>
+            let parts      = String.split(it.item, "]") in
+            let targetStr  = Maybe.getOr(List.head(List.tail(String.split(Maybe.getOr(List.head(parts), ""), "["))), "") in
+            let n          = String.length(targetStr) in
+            let target     = List.map(String.chars(targetStr), charToBit) in
+            let btnStr     = Maybe.getOr(List.head(String.split(Maybe.getOr(List.head(List.tail(parts)), ""), "{")), "") in
+            let btnParts   = List.filter(String.split(btnStr, ")"), isNonEmpty) in
+            let bAcc       = List.fold(btnParts, { masks: [], n: n }, parseButtonMask) in
+            let buttons    = bAcc.masks in
+            let k          = List.len(buttons) in
+            let powBtns    = List.zip(List.map(List.range(0, k), pow2), buttons) in
+            let zero       = List.repeat(0, n) in
+            let sAcc       = List.fold(List.range(0, Int.pow(2, k)), { minPop: k + 1, powBtns: powBtns, target: target, zero: zero }, checkSubset) in
+            it.acc + sAcc.minPop
+    }
+
+    verify: {
+        given("samples/advent_of_code/day_10/input.txt") -> 578
+    }
+}
