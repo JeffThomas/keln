@@ -932,6 +932,7 @@ fn exec_fold_until_mixed(
     Ok(acc)
 }
 
+#[allow(clippy::mutable_key_type)]
 fn exec_map_fold_user(
     module: &KelnModule,
     map: Value,
@@ -954,6 +955,7 @@ fn exec_map_fold_user(
     Ok(acc)
 }
 
+#[allow(clippy::mutable_key_type)]
 fn exec_map_fold_closure(
     module: &KelnModule,
     map: Value,
