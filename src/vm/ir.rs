@@ -333,6 +333,8 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "File.read", "File.readLines",
     // List extras (167–169)
     "List.sort", "List.combinations2", "List.foldUntil",
+    // Map.fold (170)
+    "Map.fold",
 ];
 
 pub struct BuiltinTable {
@@ -494,6 +496,13 @@ pub enum Instruction {
     // =========================================================================
     /// Create a PartialFn value from a FnRef + bound-args record.
     MakePartial { dst: usize, fn_reg: usize, bound_reg: usize },
+
+    // =========================================================================
+    // VM closures (closure-lifting: named capturing helpers compiled to bytecode)
+    // =========================================================================
+    /// Create a VmClosure from a pre-registered lifted function and a snapshot of
+    /// captured variable values. `capture_regs` is (field_name, source_reg) pairs.
+    MakeClosure { dst: usize, fn_idx: usize, capture_regs: Vec<(String, usize)> },
 
     // =========================================================================
     // Clone — always explicit; never implicit

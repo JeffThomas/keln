@@ -78,6 +78,9 @@ pub enum Value {
     TypeRef(String),
     /// Named capturing closure — references a body+env snapshot in the evaluator's closure_table.
     Closure { id: usize },
+    /// VM closure produced by closure-lifting in the bytecode backend.
+    /// Stores the lifted function index and a snapshot of captured variable values.
+    VmClosure { fn_idx: usize, captures: Vec<(String, Value)> },
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +164,7 @@ impl Ord for Value {
                 Value::Task(_) => 16,
                 Value::TypeRef(_) => 17,
                 Value::Closure { .. } => 18,
+                Value::VmClosure { .. } => 19,
             }
         }
         let d = disc(self).cmp(&disc(other));
@@ -196,6 +200,7 @@ impl Ord for Value {
             (Value::Task(a), Value::Task(b)) => a.cmp(b),
             (Value::TypeRef(a), Value::TypeRef(b)) => a.cmp(b),
             (Value::Closure { id: a }, Value::Closure { id: b }) => a.cmp(b),
+            (Value::VmClosure { fn_idx: a, .. }, Value::VmClosure { fn_idx: b, .. }) => a.cmp(b),
             _ => unreachable!("discriminants matched but variant arms did not"),
         }
     }
@@ -277,6 +282,7 @@ impl fmt::Display for Value {
             Value::FnRef(name) => write!(f, "<fn:{}>", name),
             Value::PartialFn { name, .. } => write!(f, "<partial:{}>", name),
             Value::Closure { id } => write!(f, "<closure:{}>", id),
+            Value::VmClosure { fn_idx, .. } => write!(f, "<vm-closure:{}>", fn_idx),
             Value::Channel(_) => write!(f, "<channel>"),
             Value::Duration(ms) => write!(f, "<duration:{}ms>", ms),
             Value::Timestamp(ms) => write!(f, "<timestamp:{}>", ms),

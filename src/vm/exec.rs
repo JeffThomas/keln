@@ -174,29 +174,52 @@ fn exec_step(
         Instruction::TailCallDyn { fn_reg, arg_reg } => {
             let fn_val = frame.clone_reg(*fn_reg)?;
             let new_arg = frame.take(*arg_reg)?;
-            let name = fn_ref_name(&fn_val)?;
-            let target = module
-                .fn_idx(&name)
-                .ok_or_else(|| ExecError::new(format!("TailCallDyn: unknown fn '{}'", name)))?;
-            *current_fn = target;
-            *frame = Frame::new(module.fns[*current_fn].register_count);
-            frame.write(0, new_arg);
-            *ip = 0;
+            match fn_val {
+                Value::VmClosure { fn_idx, captures } => {
+                    let merged = build_closure_call_arg(new_arg, captures);
+                    *current_fn = fn_idx;
+                    *frame = Frame::new(module.fns[*current_fn].register_count);
+                    frame.write(0, merged);
+                    *ip = 0;
+                }
+                _ => {
+                    let name = fn_ref_name(&fn_val)?;
+                    let target = module
+                        .fn_idx(&name)
+                        .ok_or_else(|| ExecError::new(format!("TailCallDyn: unknown fn '{}'", name)))?;
+                    *current_fn = target;
+                    *frame = Frame::new(module.fns[*current_fn].register_count);
+                    frame.write(0, new_arg);
+                    *ip = 0;
+                }
+            }
         }
 
         Instruction::CallDyn { dst, fn_reg, arg_reg } => {
             let fn_val = frame.clone_reg(*fn_reg)?;
             let arg = frame.clone_reg(*arg_reg)?;
-            let name = fn_ref_name(&fn_val)?;
-            let target = module
-                .fn_idx(&name)
-                .ok_or_else(|| ExecError::new(format!("CallDyn: unknown fn '{}'", name)))?;
             let dst = *dst;
-            let old_frame = std::mem::replace(frame, Frame::new(module.fns[target].register_count));
-            call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
-            *current_fn = target;
-            frame.write(0, arg);
-            *ip = 0;
+            match fn_val {
+                Value::VmClosure { fn_idx, captures } => {
+                    let merged = build_closure_call_arg(arg, captures);
+                    let old_frame = std::mem::replace(frame, Frame::new(module.fns[fn_idx].register_count));
+                    call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
+                    *current_fn = fn_idx;
+                    frame.write(0, merged);
+                    *ip = 0;
+                }
+                _ => {
+                    let name = fn_ref_name(&fn_val)?;
+                    let target = module
+                        .fn_idx(&name)
+                        .ok_or_else(|| ExecError::new(format!("CallDyn: unknown fn '{}'", name)))?;
+                    let old_frame = std::mem::replace(frame, Frame::new(module.fns[target].register_count));
+                    call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
+                    *current_fn = target;
+                    frame.write(0, arg);
+                    *ip = 0;
+                }
+            }
         }
 
         // ------------------------------------------------------------------
@@ -525,6 +548,18 @@ fn exec_step(
         }
 
         // ------------------------------------------------------------------
+        // VM closure construction
+        // ------------------------------------------------------------------
+        Instruction::MakeClosure { dst, fn_idx, capture_regs } => {
+            let mut captures = Vec::with_capacity(capture_regs.len());
+            for (name, reg) in capture_regs {
+                captures.push((name.clone(), frame.clone_reg(*reg)?));
+            }
+            frame.write(*dst, Value::VmClosure { fn_idx: *fn_idx, captures });
+            *ip += 1;
+        }
+
+        // ------------------------------------------------------------------
         // Partial application
         // ------------------------------------------------------------------
         Instruction::MakePartial { dst, fn_reg, bound_reg } => {
@@ -579,35 +614,57 @@ fn exec_step(
 fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -> Result<Value, ExecError> {
     match name {
         "List.fold" | "List.foldl" => {
-            // fold(list, init, fn)  — fn: { acc, item } -> acc
             if let [list, init, Value::FnRef(fn_name)] = &args[..]
                 && module.fn_idx(fn_name.as_str()).is_some() {
                 return exec_fold_user(module, list.clone(), init.clone(), fn_name);
             }
+            if let [list, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_fold_closure(module, list.clone(), init.clone(), *fn_idx, captures.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.map" => {
-            // map(list, fn)  — fn: item -> mapped
             if let [list, Value::FnRef(fn_name)] = &args[..]
                 && module.fn_idx(fn_name.as_str()).is_some() {
                 return exec_map_user(module, list.clone(), fn_name);
             }
+            if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_map_closure(module, list.clone(), *fn_idx, captures.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.filter" => {
-            // filter(list, fn)  — fn: item -> Bool
             if let [list, Value::FnRef(fn_name)] = &args[..]
                 && module.fn_idx(fn_name.as_str()).is_some() {
                 return exec_filter_user(module, list.clone(), fn_name);
             }
+            if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_filter_closure(module, list.clone(), *fn_idx, captures.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.foldUntil" => {
-            // foldUntil(list, init, stepFn, stopFn)
             if let [list, init, Value::FnRef(step_name), Value::FnRef(stop_name)] = &args[..]
                 && module.fn_idx(step_name.as_str()).is_some()
                 && module.fn_idx(stop_name.as_str()).is_some() {
                 return exec_fold_until_user(module, list.clone(), init.clone(), step_name, stop_name);
+            }
+            if let [list, init, Value::VmClosure { fn_idx: si, captures: sc }, Value::VmClosure { fn_idx: pi, captures: pc }] = &args[..] {
+                return exec_fold_until_closure(module, list.clone(), init.clone(), *si, sc.clone(), *pi, pc.clone());
+            }
+            if let [list, init, Value::FnRef(step_name), Value::VmClosure { fn_idx: pi, captures: pc }] = &args[..]
+                && module.fn_idx(step_name.as_str()).is_some() {
+                return exec_fold_until_mixed(module, list.clone(), init.clone(), step_name, *pi, pc.clone());
+            }
+            dispatch_builtin(name, args)
+        }
+        "Map.fold" => {
+            if let [map, init, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_map_fold_user(module, map.clone(), init.clone(), fn_name);
+            }
+            if let [map, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_map_fold_closure(module, map.clone(), init.clone(), *fn_idx, captures.clone());
             }
             dispatch_builtin(name, args)
         }
@@ -743,5 +800,181 @@ fn fn_ref_name(v: &Value) -> Result<String, ExecError> {
         Value::PartialFn { name, .. } => Ok(name.clone()),
         other => Err(ExecError::new(format!("CallDyn: expected FnRef, got {}", other))),
     }
+}
+
+// =============================================================================
+// VM-closure call helpers
+// =============================================================================
+
+/// Build the merged record `{ it: arg, cap1: v1, cap2: v2, ... }` passed to a
+/// lifted closure function.
+fn build_closure_call_arg(arg: Value, captures: Vec<(String, Value)>) -> Value {
+    let mut fields = Vec::with_capacity(1 + captures.len());
+    fields.push(("it".to_string(), arg));
+    fields.extend(captures);
+    Value::Record(fields)
+}
+
+fn exec_fold_closure(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.fold: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let step_arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("item".to_string(), item),
+        ]);
+        let merged = build_closure_call_arg(step_arg, captures.clone());
+        acc = execute(module, fn_idx, merged)?;
+    }
+    Ok(acc)
+}
+
+fn exec_map_closure(
+    module: &KelnModule,
+    list: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.map: expected List")),
+    };
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let merged = build_closure_call_arg(item, captures.clone());
+        result.push(execute(module, fn_idx, merged)?);
+    }
+    Ok(Value::List(result))
+}
+
+fn exec_filter_closure(
+    module: &KelnModule,
+    list: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.filter: expected List")),
+    };
+    let mut result = Vec::new();
+    for item in items {
+        let merged = build_closure_call_arg(item.clone(), captures.clone());
+        if execute(module, fn_idx, merged)? == Value::Bool(true) {
+            result.push(item);
+        }
+    }
+    Ok(Value::List(result))
+}
+
+fn exec_fold_until_closure(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    step_idx: usize,
+    step_captures: Vec<(String, Value)>,
+    stop_idx: usize,
+    stop_captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.foldUntil: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let step_arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("item".to_string(), item),
+        ]);
+        let step_merged = build_closure_call_arg(step_arg, step_captures.clone());
+        acc = execute(module, step_idx, step_merged)?;
+        let stop_merged = build_closure_call_arg(acc.clone(), stop_captures.clone());
+        if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+fn exec_fold_until_mixed(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    step_name: &str,
+    stop_idx: usize,
+    stop_captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => v,
+        _ => return Err(ExecError::new("List.foldUntil: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("item".to_string(), item),
+        ]);
+        acc = execute_fn(module, step_name, arg)?;
+        let stop_merged = build_closure_call_arg(acc.clone(), stop_captures.clone());
+        if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+fn exec_map_fold_user(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    fn_name: &str,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.fold: expected Map")),
+    };
+    let mut acc = init;
+    for (k, v) in entries {
+        let arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("key".to_string(), k),
+            ("value".to_string(), v),
+        ]);
+        acc = execute_fn(module, fn_name, arg)?;
+    }
+    Ok(acc)
+}
+
+fn exec_map_fold_closure(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.fold: expected Map")),
+    };
+    let mut acc = init;
+    for (k, v) in entries {
+        let step_arg = Value::Record(vec![
+            ("acc".to_string(), acc),
+            ("key".to_string(), k),
+            ("value".to_string(), v),
+        ]);
+        let merged = build_closure_call_arg(step_arg, captures.clone());
+        acc = execute(module, fn_idx, merged)?;
+    }
+    Ok(acc)
 }
 

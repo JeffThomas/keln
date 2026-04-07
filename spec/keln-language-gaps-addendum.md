@@ -688,3 +688,88 @@ helpers: {
 **`Map.toList` field name clarification:** Items produced by `Map.toList` have field `value` (not `val`). The correct type is `List<{ key: K, value: V }>`.
 
 **No grammar change.** This is a pure stdlib addition.
+
+---
+
+## Addendum 5: Debug-Mode Stack Overflow and Recursive Algorithms
+
+### Gap 15: Rust Stack Overflow in Debug Builds for Moderately Deep Evaluation
+
+**Problem:** Keln's tree-walking evaluator runs on the Rust call stack. In unoptimized (`dev`) builds, each Rust stack frame is significantly larger than in optimized builds because the compiler does not reuse stack slots across match arms. The `eval_expr_impl` function has ~20+ match arms, each with distinct locals; in debug mode the frame size for this single function can be several KB. When Keln code calls user-defined functions through closures (e.g., a `List.fold` step closure that calls a top-level function which itself calls `List.fold`), each nesting level stacks up multiple large Rust frames:
+
+`call_fn` → `eval_fn_once` → `eval_tail` → `eval_tail` (LetIn loop final) → `eval_tail` (List.fold call) → `stdlib::dispatch` → `call_value` → `eval_expr` → `eval_expr_impl` → …
+
+With Windows' default 1MB thread stack, even 5–10 levels of such nesting can overflow in a `dev` build, while the same code runs fine in `release`.
+
+**Symptoms:** `thread 'main' has overflowed its stack` / `STATUS_STACK_OVERFLOW` on Windows, even when `keln check` (parse-only) succeeds and `call_depth` is nowhere near `MAX_CALL_DEPTH`.
+
+**Resolution:** `src/main.rs` was changed to spawn the main async runtime on a thread with an explicit 64 MB stack:
+
+```rust
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async_main())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+```
+
+`#[tokio::main]` was removed and the former `async fn main()` was renamed `async fn async_main()`. All 270 existing tests continue to pass.
+
+**Effect:** Both `dev` and `release` builds now have sufficient stack for deeply-nested or multi-level Keln evaluation. The evaluator's existing `MAX_CALL_DEPTH` (2000) and `MAX_EXPR_DEPTH` (10,000) guards still fire before the 64 MB stack would be exhausted.
+
+**No grammar change.**
+
+---
+
+### Gap 16: Explicit Recursion Through Closures Causes Stack Overflow (Before Fix)
+
+**Problem (design pain point):** When an AI author writes a naturally recursive algorithm in Keln — e.g., a DFS that calls itself through a named capturing helper (`let step :: ... => ... count_paths(...) in List.fold(...)`) — the Rust call stack grows proportionally to the recursion depth. Before the 64 MB stack fix, even shallow recursion (9 levels for a 13-node example graph) caused `STATUS_STACK_OVERFLOW` in debug builds.
+
+**Workaround used:** The recursive DFS was replaced with an iterative round-based DP (same pattern as day_11). Instead of `count_paths` calling itself through a closure, the solution maintains a `Map<String, Int>` memo keyed by `"node:d:f"` and runs repeated passes over all nodes until convergence. Each pass uses only `List.fold` with non-recursive callbacks, eliminating all Rust stack growth from the algorithm itself.
+
+**For AI authors (before the fix was applied):** If a recursive Keln function stack-overflows but `keln check` succeeds and `call_depth` is low, the cause is debug-mode Rust frame sizes, not algorithmic depth. The workaround is to convert the recursion to an iterative fixpoint computation.
+
+**After the fix:** Explicit recursion through closures works correctly in both `dev` and `release` builds, up to the `MAX_CALL_DEPTH` = 2000 limit.
+
+**No grammar change.**
+
+---
+
+### Gap 17: Named Capturing Helpers Not Supported in Bytecode VM (Resolved)
+
+**Problem:** The bytecode VM (`keln compile` / `keln run-bc`) previously rejected any program using `let name :: effects In -> Out => body in rest` syntax with the error *"named capturing helpers are not supported in the bytecode VM; use the tree-walking evaluator"*.
+
+**Resolution — Closure Lifting:**
+
+The compiler now performs *closure lifting*: each `ClosureExpr` is compiled into a new top-level `KelnFn` whose single input is the merged record `{ it: <arg>, cap1: v1, cap2: v2, ... }`. The captured variable values are snapshotted at definition time by the new `MakeClosure` bytecode instruction.
+
+**Implementation details:**
+
+| Component | Change |
+|-----------|--------|
+| `src/eval/mod.rs` | Added `Value::VmClosure { fn_idx: usize, captures: Vec<(String, Value)> }` |
+| `src/vm/ir.rs` | Added `Instruction::MakeClosure { dst, fn_idx, capture_regs: Vec<(String, usize)> }` |
+| `src/vm/ir.rs` | Added `"Map.fold"` to `BUILTIN_NAMES` (index 170) for VM dispatch |
+| `src/vm/lower.rs` | `Lowerer::lower_closure_expr` — snapshots scope, registers lifted `KelnFn`, emits `MakeClosure` |
+| `src/vm/lower.rs` | `Lowerer::lower_closure_body` — builds lifted fn's `FnCtx`, extracts `it` + each capture via `FieldGetNamed` |
+| `src/vm/exec.rs` | `MakeClosure` handler, `VmClosure` branches in `CallDyn`/`TailCallDyn` |
+| `src/vm/exec.rs` | `VmClosure` paths in `List.fold`, `List.map`, `List.filter`, `List.foldUntil`, `Map.fold` higher-order builtins |
+
+**Calling convention for lifted closures:**
+
+When a `VmClosure` is called with argument `arg`, the VM builds the record `{ it: arg, cap1: v1, ... }` and calls the lifted function with it as R0. The lifted function's preamble immediately extracts `it` and each capture with `FieldGetNamed` into local registers.
+
+**Capture strategy:** All currently-in-scope variables (excluding `_`-prefixed internal names and `it`) are captured at definition time. This is conservative (may capture unused variables) but always correct.
+
+**Higher-order builtins with VmClosure:** `List.fold`, `List.map`, `List.filter`, `List.foldUntil`, and `Map.fold` all dispatch through the VM when their function argument is a `VmClosure`, rather than delegating to the tree-walking stdlib. `Map.fold` is also now available in the bytecode backend (`BUILTIN_NAMES[170]`).
+
+**No grammar change.** The `let name :: effects In -> Out => body in rest` syntax is unchanged.

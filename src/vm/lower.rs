@@ -212,6 +212,8 @@ pub struct Lowerer {
     builtins: BuiltinTable,
     /// Names of all user-defined functions (for CALL vs CALL_BUILTIN disambiguation).
     user_fns: HashSet<String>,
+    /// Counter for generating unique lifted-closure function names.
+    closure_counter: usize,
 }
 
 impl Default for Lowerer {
@@ -226,6 +228,7 @@ impl Lowerer {
             module:   KelnModule::new(),
             builtins: BuiltinTable::new(),
             user_fns: HashSet::new(),
+            closure_counter: 0,
         }
     }
 
@@ -480,10 +483,20 @@ impl Lowerer {
             }
 
             Expr::QualifiedName(parts, _) => {
-                // e.g. List.map — produce a FnRef value for use with List.map etc.
                 let name = parts.join(".");
                 let dst = ctx.alloc_reg();
-                ctx.emit(Instruction::LoadFnRef { dst, name });
+                // Zero-arg builtins must be called immediately to produce their value
+                // (e.g. `Map.empty` in `List.fold(xs, Map.empty, f)` should be an
+                // empty Map, not a FnRef that confuses downstream callers).
+                if Self::is_zero_arg_builtin(&name) {
+                    let unit_reg = ctx.alloc_reg();
+                    ctx.emit(Instruction::LoadUnit { dst: unit_reg });
+                    let builtin = self.builtins.lookup(&name).unwrap();
+                    ctx.emit(Instruction::CallBuiltin { dst, builtin, args: vec![unit_reg] });
+                } else {
+                    // e.g. List.map — produce a FnRef for higher-order use.
+                    ctx.emit(Instruction::LoadFnRef { dst, name });
+                }
                 Ok(dst)
             }
 
@@ -616,8 +629,8 @@ impl Lowerer {
                 Ok(val_reg)
             }
 
-            Expr::ClosureExpr { .. } => {
-                Err(LowerError::new("named capturing helpers (let name ::) are not supported in the bytecode VM; use the tree-walking evaluator"))
+            Expr::ClosureExpr { name, body, rest, .. } => {
+                self.lower_closure_expr(ctx, name, body, rest, tail)
             }
 
             Expr::LetIn { binding, body, .. } => {
@@ -1368,6 +1381,112 @@ impl Lowerer {
         let dst = ctx.alloc_reg();
         ctx.emit(Instruction::MakePartial { dst, fn_reg, bound_reg });
         Ok(dst)
+    }
+
+    // =========================================================================
+    // Zero-arg builtin detection
+    // =========================================================================
+
+    /// Returns true for builtins that take no meaningful argument and should be
+    /// called immediately when they appear as a bare QualifiedName expression
+    /// (e.g. `Map.empty` in `List.fold(xs, Map.empty, f)`).
+    fn is_zero_arg_builtin(name: &str) -> bool {
+        matches!(name, "Map.empty" | "Set.empty" | "Bytes.empty")
+    }
+
+    // =========================================================================
+    // Closure lifting (named capturing helpers → top-level KelnFn + MakeClosure)
+    // =========================================================================
+
+    /// Lower `let name :: effects In -> Out => body in rest` in the bytecode VM.
+    ///
+    /// Strategy: closure lifting.
+    ///   1. Snapshot all in-scope variables as captures.
+    ///   2. Create a new top-level KelnFn whose input is `{ it: <arg>, cap1: v1, ... }`.
+    ///   3. Emit `MakeClosure` at the call site to snapshot capture registers.
+    ///   4. Bind `name` in scope, then lower `rest` in the original tail context.
+    fn lower_closure_expr(
+        &mut self,
+        ctx: &mut FnCtx,
+        name: &str,
+        body: &Expr,
+        rest: &Expr,
+        tail: bool,
+    ) -> Result<usize, LowerError> {
+        // Collect all currently-in-scope variables as captures.
+        // Skip internal names (`_`-prefixed) and `it` (will be bound as closure arg).
+        let captures: Vec<(String, usize)> = ctx.env_stack
+            .iter()
+            .flat_map(|scope| scope.iter())
+            .filter(|(n, _)| !n.starts_with('_') && n.as_str() != "it")
+            .map(|(n, r)| (n.clone(), *r))
+            .collect();
+
+        // Generate a unique lifted-function name.
+        let cid = self.closure_counter;
+        self.closure_counter += 1;
+        let lifted_name = format!("{}::{}@{}", ctx.name, name, cid);
+
+        // Pre-register as a placeholder so any forward index references are stable.
+        let fn_idx = self.module.add_fn(KelnFn::new(&lifted_name));
+        self.user_fns.insert(lifted_name.clone());
+
+        // Lower the closure body into a fresh FnCtx and replace the placeholder.
+        let kfn = self.lower_closure_body(&lifted_name, body, &captures)?;
+        self.module.fns[fn_idx] = kfn;
+
+        // Emit MakeClosure into the enclosing function's instruction stream.
+        let dst = ctx.alloc_named_reg(name);
+        ctx.emit(Instruction::MakeClosure {
+            dst,
+            fn_idx,
+            capture_regs: captures,
+        });
+
+        // Bind `name` and continue lowering `rest`.
+        ctx.push_scope();
+        ctx.bind_var(name, dst);
+        let result = self.lower_expr(ctx, rest, tail)?;
+        ctx.pop_scope();
+        Ok(result)
+    }
+
+    /// Build the lifted KelnFn for a closure body.
+    ///
+    /// The lifted function's single input (R0) is a record:
+    ///   `{ it: <original_arg>, cap_name1: v1, cap_name2: v2, ... }`
+    ///
+    /// The function extracts `it` and each capture via FieldGetNamed, then
+    /// lowers `body` in tail position.
+    fn lower_closure_body(
+        &mut self,
+        lifted_name: &str,
+        body: &Expr,
+        captures: &[(String, usize)],
+    ) -> Result<KelnFn, LowerError> {
+        let mut ctx = FnCtx::new(lifted_name);
+        // R0 = merged record { it: <arg>, cap1: v1, ... }
+
+        // Bind "it" = R0.it
+        let it_reg = ctx.alloc_named_reg("it");
+        let it_idx = self.module.constants.intern_str("it");
+        ctx.emit(Instruction::FieldGetNamed { dst: it_reg, src: 0, name_idx: it_idx });
+        ctx.bind_var("it", it_reg);
+
+        // Bind each captured variable from its field in R0.
+        for (cap_name, _) in captures {
+            let cap_reg = ctx.alloc_named_reg(cap_name);
+            let name_idx = self.module.constants.intern_str(cap_name);
+            ctx.emit(Instruction::FieldGetNamed { dst: cap_reg, src: 0, name_idx });
+            ctx.bind_var(cap_name, cap_reg);
+        }
+
+        // Lower body in tail position.
+        let result = self.lower_expr(&mut ctx, body, true)?;
+        if result != NO_REG {
+            ctx.emit(Instruction::Return { src: result });
+        }
+        ctx.finish()
     }
 
     // =========================================================================

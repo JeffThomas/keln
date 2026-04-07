@@ -816,7 +816,10 @@ Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
 | `threshold` as a field or variable | Use `cutoff`, `limit`, `max_val`, etc. | `threshold` is a reserved keyword (`promote: threshold` syntax) |
 | Closure with `.with()` for context capture | `let name :: effects In -> Out => body in rest` | `.with()` on a function eagerly binds and does not capture env; use named capturing helper for capture |
 | Explicit full record copy `{ a: r.a, b: r.b, c: newC }` | `r.with(c: newC)` | `.with()` on a record returns an updated copy; no need to list unchanged fields |
-| `let step :: ... => body in ...` with `keln compile` | Use `keln verify` / `keln run` | Named capturing helpers not supported in bytecode VM |
+| `let step :: ... => body in ...` with `keln compile` — works as of Gap 17 | Use normally with `keln compile` / `keln run-bc` | Named capturing helpers are now supported in the bytecode VM via closure lifting |
+| Recursive algorithm through a capturing closure (DFS, tree walk) causes `STATUS_STACK_OVERFLOW` in `dev` build even for shallow depth | Replace with iterative fixpoint (round-based DP with `List.foldUntil`) | Debug-mode Rust frames are ~10× larger than release; the 64 MB main-thread stack (added in Gap 15 fix) raises the limit but deep unbounded recursion still risks overflow |
+| Missing closing `}` inside a `match` arm body | Count braces; add the missing `}` before `confidence:` | Parser reports `"expected pattern at N:M"` pointing at the next function-level keyword (`confidence:`, `reason:`, `verify:`) — not at the unclosed brace |
+| `keln verify` crashes with no error message (STATUS_STACK_OVERFLOW, wrong output, silent failure) | Run `keln check <file>` first | `keln check` runs only the parser and prints `ok` or a parse error; if it prints `ok` the problem is in the evaluator, not the source |
 
 ---
 

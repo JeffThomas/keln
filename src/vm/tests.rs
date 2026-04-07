@@ -781,6 +781,115 @@ fn test_file_read_lines() {
 }
 
 // =============================================================================
+// VM closure lifting — named capturing helpers in bytecode
+// =============================================================================
+
+#[test]
+fn test_closure_fold_captures_offset() {
+    let src = r#"
+fn offset_fold {
+    Pure { list: List<Int>, offset: Int } -> Int
+    in: args
+    out:
+        let step :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item + args.offset in
+        List.fold(args.list, 0, step)
+    confidence: 1.0
+    reason: "closure captures offset from outer scope"
+}
+"#;
+    let arg = Value::Record(vec![
+        ("list".to_string(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        ("offset".to_string(), Value::Int(10)),
+    ]);
+    assert_both_backends(src, "offset_fold", arg, Value::Int(36));
+}
+
+#[test]
+fn test_closure_fold_no_captures() {
+    let src = r#"
+fn plain_sum {
+    Pure List<Int> -> Int
+    in: list
+    out:
+        let step :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item in
+        List.fold(list, 0, step)
+    confidence: 1.0
+    reason: "closure with no captures"
+}
+"#;
+    let arg = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+    assert_both_backends(src, "plain_sum", arg, Value::Int(10));
+}
+
+#[test]
+fn test_closure_map_captures_factor() {
+    let src = r#"
+fn multiply_all {
+    Pure { list: List<Int>, factor: Int } -> List<Int>
+    in: args
+    out:
+        let mult :: Pure Int -> Int => it * args.factor in
+        List.map(args.list, mult)
+    confidence: 1.0
+    reason: "closure captures factor for map"
+}
+"#;
+    let arg = Value::Record(vec![
+        ("list".to_string(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        ("factor".to_string(), Value::Int(5)),
+    ]);
+    assert_both_backends(src, "multiply_all", arg,
+        Value::List(vec![Value::Int(5), Value::Int(10), Value::Int(15)]));
+}
+
+#[test]
+fn test_closure_filter_captures_threshold() {
+    let src = r#"
+fn filter_above {
+    Pure { list: List<Int>, min_val: Int } -> List<Int>
+    in: args
+    out:
+        let pred :: Pure Int -> Bool => it > args.min_val in
+        List.filter(args.list, pred)
+    confidence: 1.0
+    reason: "closure captures min_val for filter predicate"
+}
+"#;
+    let arg = Value::Record(vec![
+        ("list".to_string(), Value::List(vec![
+            Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(7), Value::Int(2),
+        ])),
+        ("min_val".to_string(), Value::Int(3)),
+    ]);
+    assert_both_backends(src, "filter_above", arg,
+        Value::List(vec![Value::Int(5), Value::Int(7)]));
+}
+
+#[test]
+fn test_closure_multi_capture() {
+    let src = r#"
+fn weighted_sum {
+    Pure { list: List<Int>, base: Int, weight: Int } -> Int
+    in: args
+    out:
+        let step :: Pure { acc: Int, item: Int } -> Int =>
+            it.acc + it.item * args.weight + args.base
+        in
+        List.fold(args.list, 0, step)
+    confidence: 1.0
+    reason: "closure captures two variables"
+}
+"#;
+    // step: 0+(1*2+5)=7 → 7+(2*2+5)=16 → 16+(3*2+5)=27
+    let arg = Value::Record(vec![
+        ("list".to_string(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        ("base".to_string(), Value::Int(5)),
+        ("weight".to_string(), Value::Int(2)),
+    ]);
+    assert_both_backends(src, "weighted_sum", arg, Value::Int(27));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 

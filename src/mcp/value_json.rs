@@ -62,6 +62,7 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
         }
         Value::PartialFn { name, .. } => json!({ "$partial": name }),
         Value::Closure { id } => json!({ "$closure": id }),
+        Value::VmClosure { fn_idx, .. } => json!({ "$vm-closure": fn_idx }),
     }
 }
 

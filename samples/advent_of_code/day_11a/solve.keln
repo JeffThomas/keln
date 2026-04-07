@@ -1,0 +1,138 @@
+-- AoC Day 11a: Reactor (Part Two)
+--
+-- Count paths from "svr" to "out" that visit BOTH "dac" AND "fft".
+-- Input format: "device: neighbor1 neighbor2 ..." (one per line, DAG)
+--
+-- Algorithm: iterative round-based DP (same structure as day_11).
+--   For each node n and flag pair (d,f) in {0,1}^2:
+--     count[n][d][f] = # paths from n to "out" given has_dac=d, has_fft=f so far
+--   Base: count["out"][1][1]=1; all other "out" states = 0.
+--   Each round: for every (node,d,f) not yet resolved, if all children are
+--   resolved in their updated flag states, sum and record.
+--   Key: "node:d:f" in memo Map<String,Int>. Answer = count["svr"][0][0].
+
+fn solve {
+    IO String -> Int
+    in: path
+    out:
+        let lines     = File.readLines(path) in
+        let non_empty = List.filter(lines, isNonEmptyLine) in
+        let graph     = List.fold(non_empty, Map.empty, buildGraph) in
+        let num_nodes = List.len(Map.keys(graph)) in
+        let init_memo = init_out_memo(Map.empty) in
+        let start     = { memo: init_memo, graph: graph } in
+        let final     = List.foldUntil(List.range(0, num_nodes * 4 + 4), start, do_round, has_svr) in
+        Maybe.getOr(Map.get(final.memo, "svr:0:0"), 0)
+
+    helpers: {
+        isNonEmptyLine :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        buildGraph :: Pure { acc: Map<String, List<String>>, item: String } -> Map<String, List<String>> =>
+            let parts     = String.split(it.item, ":") in
+            let device    = String.trim(Maybe.getOr(List.head(parts), "")) in
+            let rest_str  = String.trim(Maybe.getOr(List.head(List.tail(parts)), "")) in
+            let neighbors = List.filter(String.split(rest_str, " "), isNonEmptyToken) in
+            Map.insert(it.acc, device, neighbors)
+
+        isNonEmptyToken :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+
+        do_round :: Pure { acc: { memo: Map<String, Int>, graph: Map<String, List<String>> }, item: Int } -> { memo: Map<String, Int>, graph: Map<String, List<String>> } =>
+            { memo: compute_round({ memo: it.acc.memo, graph: it.acc.graph }), graph: it.acc.graph }
+
+        has_svr :: Pure { memo: Map<String, Int>, graph: Map<String, List<String>> } -> Bool =>
+            Map.contains(it.memo, "svr:0:0")
+    }
+
+    confidence: auto
+    reason: "iterative round-based DP; converges because graph is a DAG"
+    verify: {
+        given("samples/advent_of_code/day_11a/example.txt") -> 2
+        given("samples/advent_of_code/day_11a/input.txt") -> 462444153119850
+    }
+}
+
+fn init_out_memo {
+    Pure Map<String, Int> -> Map<String, Int>
+    in: memo
+    out:
+        let m1 = Map.insert(memo, "out:1:1", 1) in
+        let m2 = Map.insert(m1,   "out:0:1", 0) in
+        let m3 = Map.insert(m2,   "out:1:0", 0) in
+        Map.insert(m3, "out:0:0", 0)
+    confidence: 1.0
+    reason: "only (has_dac=true, has_fft=true) at out counts as 1 path; others 0"
+}
+
+fn compute_round {
+    Pure { memo: Map<String, Int>, graph: Map<String, List<String>> } -> Map<String, Int>
+    in: args
+    out:
+        let pairs = Map.toList(args.graph) in
+        let state = { result: args.memo, base: args.memo } in
+        let final = List.fold(pairs, state, try_all_states) in
+        final.result
+    confidence: auto
+    reason: "one pass over all nodes; for each node try resolving all 4 flag states"
+}
+
+fn try_all_states {
+    Pure { acc: { result: Map<String, Int>, base: Map<String, Int> }, item: { key: String, value: List<String> } } -> { result: Map<String, Int>, base: Map<String, Int> }
+    in: it
+    out:
+        let node     = it.item.key in
+        let children = it.item.value in
+        let states   = [{ d: false, f: false }, { d: false, f: true }, { d: true, f: false }, { d: true, f: true }] in
+        let try_one :: Pure { acc: { result: Map<String, Int>, base: Map<String, Int> }, item: { d: Bool, f: Bool } } -> { result: Map<String, Int>, base: Map<String, Int> } =>
+            let key = node_key({ node: node, d: it.item.d, f: it.item.f }) in
+            match Map.contains(it.acc.result, key) {
+                true  -> it.acc
+                false ->
+                    let cs = compute_child_states({ children: children, d: it.item.d, f: it.item.f, base: it.acc.base }) in
+                    match cs.all_ok {
+                        false -> it.acc
+                        true  -> { result: Map.insert(it.acc.result, key, cs.total), base: it.acc.base }
+                    }
+            }
+        in
+        List.fold(states, it.acc, try_one)
+    confidence: auto
+    reason: "for each of the 4 (d,f) states, attempt to resolve this node if all children are known"
+}
+
+fn compute_child_states {
+    Pure { children: List<String>, d: Bool, f: Bool, base: Map<String, Int> } -> { all_ok: Bool, total: Int }
+    in: args
+    out:
+        let d    = args.d in
+        let f    = args.f in
+        let base = args.base in
+        let check :: Pure { acc: { all_ok: Bool, total: Int }, item: String } -> { all_ok: Bool, total: Int } =>
+            match it.acc.all_ok {
+                false -> it.acc
+                true  ->
+                    let cd  = match d { true -> true  false -> it.item == "dac" } in
+                    let cf  = match f { true -> true  false -> it.item == "fft" } in
+                    let key = node_key({ node: it.item, d: cd, f: cf }) in
+                    match Map.get(base, key) {
+                        None    -> { all_ok: false, total: 0 }
+                        Some(v) -> { all_ok: true, total: it.acc.total + v }
+                    }
+            }
+        in
+        List.fold(args.children, { all_ok: true, total: 0 }, check)
+    confidence: auto
+    reason: "check each child in its updated flag state; short-circuit on first miss"
+}
+
+fn node_key {
+    Pure { node: String, d: Bool, f: Bool } -> String
+    in: args
+    out:
+        let ds = match args.d { true -> "1"  false -> "0" } in
+        let fs = match args.f { true -> "1"  false -> "0" } in
+        String.join([args.node, ds, fs], ":")
+    confidence: 1.0
+    reason: "deterministic key encoding node + two boolean flags"
+}

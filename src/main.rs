@@ -75,8 +75,22 @@ enum Command {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async_main())
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+async fn async_main() {
     let cli = Cli::parse();
 
     match cli.command {
