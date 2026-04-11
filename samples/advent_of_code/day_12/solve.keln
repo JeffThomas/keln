@@ -1,0 +1,381 @@
+-- Day 12: Christmas Tree Farm
+-- Count rectangular regions that can fit all required present shapes.
+-- Shapes can be rotated and flipped. Piece-first backtracking + area pruning.
+-- Key: empty cells are ALLOWED; pieces can interleave through each other's holes.
+-- Algorithm: find the first piece type with count > 0; try all valid placements
+-- for that type with anchor pos >= prevPos[type] (symmetry breaking for identical pieces).
+-- Area pruning catches most infeasible regions immediately (sum of # cells > grid area).
+
+fn isShapeRowLine {
+    Pure String -> Bool
+    in: s
+    out:
+        let t = String.trim(s) in
+        match String.length(t) == 3 {
+            true  -> Bool.not(String.contains(t, ":"))
+            false -> false
+        }
+    confidence: 1.0
+    reason: "shape rows are exactly 3 chars and contain no colon"
+}
+
+fn isRegionLine {
+    Pure String -> Bool
+    in: s
+    out:
+        let t = String.trim(s) in
+        match String.contains(t, "x") {
+            true  -> String.contains(t, ":")
+            false -> false
+        }
+    confidence: 1.0
+    reason: "region lines have the WxH: counts format; contain both x and colon"
+}
+
+fn buildShapeFromRows {
+    Pure List<String> -> List<{dr: Int, dc: Int}>
+    in: rows
+    out:
+        let indexedRows = List.zip(rows, List.range(0, List.len(rows))) in
+        let rowCells :: Pure { fst: String, snd: Int } -> List<{dr: Int, dc: Int}> =>
+            let rowIdx = it.snd in
+            let chars  = String.chars(it.fst) in
+            let idxd   = List.zip(chars, List.range(0, List.len(chars))) in
+            let hashes = List.filter(idxd, isHash) in
+            let mkCell :: Pure { fst: String, snd: Int } -> {dr: Int, dc: Int} =>
+                { dr: rowIdx, dc: it.snd }
+            in
+            List.map(hashes, mkCell)
+        in
+        List.flatten(List.map(indexedRows, rowCells))
+    helpers: {
+        isHash :: Pure { fst: String, snd: Int } -> Bool =>
+            it.fst == "#"
+    }
+    confidence: 1.0
+    reason: "scan each row for # positions; produce (row-offset, col-offset) pairs"
+}
+
+fn rotate90 {
+    Pure List<{dr: Int, dc: Int}> -> List<{dr: Int, dc: Int}>
+    in: cells
+    out:
+        List.map(cells,
+            let rot :: Pure {dr: Int, dc: Int} -> {dr: Int, dc: Int} =>
+                { dr: it.dc, dc: 0 - it.dr }
+            in rot)
+    confidence: 1.0
+    reason: "rotate 90 degrees CW: (r,c) maps to (c,-r)"
+}
+
+fn flipH {
+    Pure List<{dr: Int, dc: Int}> -> List<{dr: Int, dc: Int}>
+    in: cells
+    out:
+        List.map(cells,
+            let fl :: Pure {dr: Int, dc: Int} -> {dr: Int, dc: Int} =>
+                { dr: it.dr, dc: 0 - it.dc }
+            in fl)
+    confidence: 1.0
+    reason: "flip horizontal: (r,c) maps to (r,-c)"
+}
+
+fn normalizePiece {
+    Pure List<{dr: Int, dc: Int}> -> List<{dr: Int, dc: Int}>
+    in: cells
+    out:
+        let minR = List.fold(cells, 999999,
+            let getMinR :: Pure { acc: Int, item: {dr: Int, dc: Int} } -> Int =>
+                Int.min(it.acc, it.item.dr)
+            in getMinR) in
+        let minC = List.fold(cells, 999999,
+            let getMinC :: Pure { acc: Int, item: {dr: Int, dc: Int} } -> Int =>
+                Int.min(it.acc, it.item.dc)
+            in getMinC) in
+        let shifted = List.map(cells,
+            let shift :: Pure {dr: Int, dc: Int} -> {dr: Int, dc: Int} =>
+                { dr: it.dr - minR, dc: it.dc - minC }
+            in shift) in
+        List.sort(shifted)
+    confidence: 1.0
+    reason: "translate so minimum row and col are 0; sort for canonical form"
+}
+
+fn pieceKey {
+    Pure List<{dr: Int, dc: Int}> -> String
+    in: cells
+    out:
+        let strs = List.map(cells,
+            let cellStr :: Pure {dr: Int, dc: Int} -> String =>
+                String.join([Int.toString(it.dr), Int.toString(it.dc)], ",")
+            in cellStr) in
+        String.join(strs, "|")
+    confidence: 1.0
+    reason: "canonical string key for a normalized sorted piece"
+}
+
+fn computeOrients {
+    Pure List<{dr: Int, dc: Int}> -> List<List<{dr: Int, dc: Int}>>
+    in: cells
+    out:
+        let r0   = normalizePiece(cells) in
+        let r90  = normalizePiece(rotate90(r0)) in
+        let r180 = normalizePiece(rotate90(r90)) in
+        let r270 = normalizePiece(rotate90(r180)) in
+        let f0   = normalizePiece(flipH(r0)) in
+        let f90  = normalizePiece(rotate90(f0)) in
+        let f180 = normalizePiece(rotate90(f90)) in
+        let f270 = normalizePiece(rotate90(f180)) in
+        let all8 = [r0, r90, r180, r270, f0, f90, f180, f270] in
+        let addIfNew :: Pure { acc: { seen: Set<String>, result: List<List<{dr: Int, dc: Int}>> }, item: List<{dr: Int, dc: Int}> } -> { seen: Set<String>, result: List<List<{dr: Int, dc: Int}>> } =>
+            let k = pieceKey(it.item) in
+            match Set.contains(it.acc.seen, k) {
+                true  -> it.acc
+                false -> { seen: Set.insert(it.acc.seen, k), result: List.append(it.acc.result, it.item) }
+            }
+        in
+        let initState = { seen: Set.empty, result: [] } in
+        let finalState = List.fold(all8, initState, addIfNew) in
+        finalState.result
+    confidence: 1.0
+    reason: "4 rotations times 2 flips gives up to 8 orientations; deduplicate symmetric shapes"
+}
+
+fn parseRegion {
+    Pure String -> { w: Int, h: Int, counts: List<Int> }
+    in: s
+    out:
+        let parts    = String.split(String.trim(s), ":") in
+        let dims     = String.trim(Maybe.getOr(List.head(parts), "")) in
+        let rest     = String.trim(Maybe.getOr(List.head(List.tail(parts)), "")) in
+        let dimParts = String.split(dims, "x") in
+        let wStr     = String.trim(Maybe.getOr(List.head(dimParts), "0")) in
+        let hStr     = String.trim(Maybe.getOr(List.head(List.tail(dimParts)), "0")) in
+        let w        = Result.unwrapOr(Int.parse(wStr), 0) in
+        let h        = Result.unwrapOr(Int.parse(hStr), 0) in
+        let cStrs    = List.filter(String.split(rest, " "), isNonEmpty) in
+        let counts   = List.map(cStrs, parseNum) in
+        { w: w, h: h, counts: counts }
+    helpers: {
+        isNonEmpty :: Pure String -> Bool =>
+            Bool.not(String.isEmpty(String.trim(it)))
+        parseNum :: Pure String -> Int =>
+            Result.unwrapOr(Int.parse(String.trim(it)), 0)
+    }
+    confidence: auto
+    reason: "parse WxH: c0 c1 c2 c3 c4 c5 region specification line"
+}
+
+fn canPlaceAt {
+    Pure { board: Set<Int>, w: Int, h: Int, orient: List<{dr: Int, dc: Int}>, pr: Int, pc: Int } -> Bool
+    in: ctx
+    out:
+        List.fold(ctx.orient, true,
+            let checkCell :: Pure { acc: Bool, item: {dr: Int, dc: Int} } -> Bool =>
+                match it.acc {
+                    false -> false
+                    true  ->
+                        let r = ctx.pr + it.item.dr in
+                        let c = ctx.pc + it.item.dc in
+                        match r >= 0 {
+                            false -> false
+                            true  ->
+                                match r < ctx.h {
+                                    false -> false
+                                    true  ->
+                                        match c >= 0 {
+                                            false -> false
+                                            true  ->
+                                                match c < ctx.w {
+                                                    false -> false
+                                                    true  ->
+                                                        Bool.not(Set.contains(ctx.board, r * ctx.w + c))
+                                                }
+                                        }
+                                }
+                        }
+                }
+            in checkCell)
+    confidence: 1.0
+    reason: "all piece cells must be in bounds and unoccupied"
+}
+
+fn placeOnBoard {
+    Pure { board: Set<Int>, orient: List<{dr: Int, dc: Int}>, pr: Int, pc: Int, w: Int } -> Set<Int>
+    in: ctx
+    out:
+        List.fold(ctx.orient, ctx.board,
+            let addCell :: Pure { acc: Set<Int>, item: {dr: Int, dc: Int} } -> Set<Int> =>
+                Set.insert(it.acc, (ctx.pr + it.item.dr) * ctx.w + (ctx.pc + it.item.dc))
+            in addCell)
+    confidence: 1.0
+    reason: "insert all piece cell positions into the occupied set"
+}
+
+fn decrementAt {
+    Pure { counts: List<Int>, idx: Int } -> List<Int>
+    in: args
+    out:
+        let indexed = List.zip(args.counts, List.range(0, List.len(args.counts))) in
+        List.map(indexed,
+            let decAt :: Pure { fst: Int, snd: Int } -> Int =>
+                match it.snd == args.idx {
+                    true  -> it.fst - 1
+                    false -> it.fst
+                }
+            in decAt)
+    confidence: 1.0
+    reason: "decrement element at given index; leave all other counts unchanged"
+}
+
+fn updateAt {
+    Pure { lst: List<Int>, idx: Int, val: Int } -> List<Int>
+    in: args
+    out:
+        let indexed = List.zip(args.lst, List.range(0, List.len(args.lst))) in
+        List.map(indexed,
+            let upd :: Pure { fst: Int, snd: Int } -> Int =>
+                match it.snd == args.idx {
+                    true  -> args.val
+                    false -> it.fst
+                }
+            in upd)
+    confidence: 1.0
+    reason: "set element at index to given value; leave all other elements unchanged"
+}
+
+fn genPlacementsForType {
+    Pure {
+        board:    Set<Int>,
+        w:        Int,
+        h:        Int,
+        typeOrts: List<List<{dr: Int, dc: Int}>>,
+        typeIdx:  Int,
+        minPos:   Int,
+        counts:   List<Int>,
+        prevPos:  List<Int>,
+        total:    Int
+    } -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int }>
+    in: ctx
+    out:
+        let positions = List.drop(List.range(0, ctx.w * ctx.h), ctx.minPos) in
+        List.flatten(List.map(ctx.typeOrts,
+            let perOrient :: Pure List<{dr: Int, dc: Int}> -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int }> =>
+                let orient = it in
+                let anchor = Maybe.getOr(List.head(orient), { dr: 0, dc: 0 }) in
+                let valids = List.filter(positions,
+                    let isValidPos :: Pure Int -> Bool =>
+                        let pr = it / ctx.w - anchor.dr in
+                        let pc = it % ctx.w - anchor.dc in
+                        canPlaceAt({ board: ctx.board, w: ctx.w, h: ctx.h, orient: orient, pr: pr, pc: pc })
+                    in isValidPos) in
+                List.map(valids,
+                    let mkResult :: Pure Int -> { newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int } =>
+                        let pr = it / ctx.w - anchor.dr in
+                        let pc = it % ctx.w - anchor.dc in
+                        { newBoard:   placeOnBoard({ board: ctx.board, orient: orient, pr: pr, pc: pc, w: ctx.w }),
+                          newCounts:  decrementAt({ counts: ctx.counts, idx: ctx.typeIdx }),
+                          newPrevPos: updateAt({ lst: ctx.prevPos, idx: ctx.typeIdx, val: it }),
+                          newTotal:   ctx.total - 1 }
+                    in mkResult)
+            in perOrient))
+    confidence: auto
+    reason: "for type typeIdx, enumerate all placements with anchor position >= minPos (symmetry breaking)"
+}
+
+fn canFit {
+    Pure {
+        board:   Set<Int>,
+        w:       Int,
+        h:       Int,
+        orients: List<List<List<{dr: Int, dc: Int}>>>,
+        counts:  List<Int>,
+        prevPos: List<Int>,
+        total:   Int
+    } -> Bool
+    in: state
+    out:
+        match state.total == 0 {
+            true  -> true
+            false ->
+                let freeCells   = state.w * state.h - Set.size(state.board) in
+                let getArea :: Pure List<List<{dr: Int, dc: Int}>> -> Int =>
+                    List.len(Maybe.getOr(List.head(it), []))
+                in
+                let areas       = List.map(state.orients, getArea) in
+                let areasZipped = List.zip(areas, state.counts) in
+                let sumArea :: Pure { acc: Int, item: { fst: Int, snd: Int } } -> Int =>
+                    it.acc + it.item.fst * it.item.snd
+                in
+                let remainArea = List.fold(areasZipped, 0, sumArea) in
+                match remainArea > freeCells {
+                    true  -> false
+                    false ->
+                        let findType :: Pure { acc: Int, item: { fst: Int, snd: Int } } -> Int =>
+                            match it.acc == -1 {
+                                true  ->
+                                    match it.item.fst > 0 {
+                                        true  -> it.item.snd
+                                        false -> -1
+                                    }
+                                false -> it.acc
+                            }
+                        in
+                        let notNeg :: Pure Int -> Bool => Bool.not(it == -1) in
+                        let firstType = List.foldUntil(
+                            List.zip(state.counts, List.range(0, List.len(state.counts))),
+                            -1, findType, notNeg) in
+                        let typeOrts = Maybe.getOr(List.head(List.drop(state.orients, firstType)), []) in
+                        let minPos   = Maybe.getOr(List.head(List.drop(state.prevPos,  firstType)), 0) in
+                        let placements = genPlacementsForType({
+                            board:    state.board,    w:        state.w,
+                            h:        state.h,        typeOrts: typeOrts,
+                            typeIdx:  firstType,      minPos:   minPos,
+                            counts:   state.counts,   prevPos:  state.prevPos,
+                            total:    state.total }) in
+                        let tryOne :: Pure { acc: Bool, item: { newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int } } -> Bool =>
+                            match it.acc {
+                                true  -> true
+                                false -> canFit({ board: it.item.newBoard, w: state.w, h: state.h, orients: state.orients, counts: it.item.newCounts, prevPos: it.item.newPrevPos, total: it.item.newTotal })
+                            }
+                        in
+                        let stopWhenDone :: Pure Bool -> Bool => it in
+                        List.foldUntil(placements, false, tryOne, stopWhenDone)
+                }
+        }
+    confidence: auto
+    reason: "piece-first backtracking: pick first type with count>0, try all placements with symmetry breaking; area pruning"
+}
+
+fn solve {
+    IO String -> Int
+    in: path
+    out:
+        let lines     = File.readLines(path) in
+        let shapeRows = List.filter(lines, isShapeRowLine) in
+        let regLines  = List.filter(lines, isRegionLine) in
+        let numShapes = List.len(shapeRows) / 3 in
+        let getGroup :: Pure Int -> List<{dr: Int, dc: Int}> =>
+            buildShapeFromRows(List.take(List.drop(shapeRows, it * 3), 3))
+        in
+        let shapes   = List.map(List.range(0, numShapes), getGroup) in
+        let allOrts  = List.map(shapes, computeOrients) in
+        let regions  = List.map(regLines, parseRegion) in
+        let sumFn  :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item in
+        let zeroFn :: Pure Int -> Int => 0 in
+        let initPrev = List.map(List.range(0, numShapes), zeroFn) in
+        let countFit :: Pure { acc: Int, item: { w: Int, h: Int, counts: List<Int> } } -> Int =>
+            let tot  = List.fold(it.item.counts, 0, sumFn) in
+            let fits = canFit({ board: Set.empty, w: it.item.w, h: it.item.h, orients: allOrts, counts: it.item.counts, prevPos: initPrev, total: tot }) in
+            match fits {
+                true  -> it.acc + 1
+                false -> it.acc
+            }
+        in
+        List.fold(regions, 0, countFit)
+    confidence: auto
+    reason: "parse shapes and regions; generate orientations; count regions where all pieces fit"
+    verify: {
+        given("samples/advent_of_code/day_12/example.txt") -> 2
+    }
+}
