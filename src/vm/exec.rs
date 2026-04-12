@@ -177,7 +177,7 @@ fn exec_step(
             let new_arg = frame.take(*arg_reg)?;
             match fn_val {
                 Value::VmClosure { fn_idx, captures } => {
-                    let merged = build_closure_call_arg(new_arg, captures);
+                    let merged = build_closure_call_arg(new_arg, &captures);
                     *current_fn = fn_idx;
                     *frame = Frame::new(module.fns[*current_fn].register_count);
                     frame.write(0, merged);
@@ -202,7 +202,7 @@ fn exec_step(
             let dst = *dst;
             match fn_val {
                 Value::VmClosure { fn_idx, captures } => {
-                    let merged = build_closure_call_arg(arg, captures);
+                    let merged = build_closure_call_arg(arg, &captures);
                     let old_frame = std::mem::replace(frame, Frame::new(module.fns[fn_idx].register_count));
                     call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
                     *current_fn = fn_idx;
@@ -320,19 +320,17 @@ fn exec_step(
             let field_names = module
                 .layouts
                 .fields_of(*layout_idx)
-                .ok_or_else(|| ExecError::new(format!("MakeRecord: unknown layout {}", layout_idx)))?
-                .clone();
+                .ok_or_else(|| ExecError::new(format!("MakeRecord: unknown layout {}", layout_idx)))?;
             let mut record: Vec<(String, Value)> = Vec::with_capacity(field_names.len());
-            for (name, reg) in field_names.into_iter().zip(fields.iter()) {
-                record.push((name, frame.clone_reg(*reg)?));
+            for (name, reg) in field_names.iter().zip(fields.iter()) {
+                record.push((name.clone(), frame.clone_reg(*reg)?));
             }
             frame.write(*dst, Value::Record(record));
             *ip += 1;
         }
 
         Instruction::FieldGet { dst, src, field_idx } => {
-            let rec = frame.clone_reg(*src)?;
-            let v = match &rec {
+            let v = match frame.read(*src)? {
                 Value::Record(fields) => fields
                     .get(*field_idx)
                     .map(|(_, v)| v.clone())
@@ -344,15 +342,14 @@ fn exec_step(
         }
 
         Instruction::FieldGetNamed { dst, src, name_idx } => {
-            let rec = frame.clone_reg(*src)?;
             let field_name = match module.constants.entries.get(*name_idx as usize) {
-                Some(Constant::Str(s)) => s.clone(),
+                Some(Constant::Str(s)) => s.as_str(),
                 _ => return Err(ExecError::new(format!("FIELD_GET_NAMED: invalid name_idx {}", name_idx))),
             };
-            let v = match &rec {
+            let v = match frame.read(*src)? {
                 Value::Record(fields) => fields
                     .iter()
-                    .find(|(k, _)| k == &field_name)
+                    .find(|(k, _)| k.as_str() == field_name)
                     .map(|(_, v)| v.clone())
                     .ok_or_else(|| ExecError::new(format!("FIELD_GET_NAMED: field '{}' not found", field_name)))?,
                 other => return Err(ExecError::new(format!("FIELD_GET_NAMED: expected record, got {}", other))),
@@ -699,13 +696,15 @@ fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) 
         Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.fold: expected List")),
     };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("List.fold: unknown fn '{}'", fn_name)))?;
     let mut acc = init;
     for item in items {
         let arg = Value::Record(vec![
             ("acc".to_string(), acc),
             ("item".to_string(), item),
         ]);
-        acc = execute_fn(module, fn_name, arg)?;
+        acc = execute(module, fn_idx, arg)?;
     }
     Ok(acc)
 }
@@ -715,9 +714,11 @@ fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Valu
         Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.map: expected List")),
     };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("List.map: unknown fn '{}'", fn_name)))?;
     let mut result = Vec::with_capacity(items.len());
     for item in items {
-        result.push(execute_fn(module, fn_name, item)?);
+        result.push(execute(module, fn_idx, item)?);
     }
     Ok(Value::List(Rc::new(result)))
 }
@@ -727,14 +728,18 @@ fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name
         Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
+    let step_idx = module.fn_idx(step_name)
+        .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", step_name)))?;
+    let stop_idx = module.fn_idx(stop_name)
+        .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", stop_name)))?;
     let mut acc = init;
     for item in items {
         let arg = Value::Record(vec![
             ("acc".to_string(), acc),
             ("item".to_string(), item),
         ]);
-        acc = execute_fn(module, step_name, arg)?;
-        if execute_fn(module, stop_name, acc.clone())? == Value::Bool(true) {
+        acc = execute(module, step_idx, arg)?;
+        if execute(module, stop_idx, acc.clone())? == Value::Bool(true) {
             break;
         }
     }
@@ -746,9 +751,11 @@ fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<V
         Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.filter: expected List")),
     };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("List.filter: unknown fn '{}'", fn_name)))?;
     let mut result = Vec::new();
     for item in items {
-        if execute_fn(module, fn_name, item.clone())? == Value::Bool(true) {
+        if execute(module, fn_idx, item.clone())? == Value::Bool(true) {
             result.push(item);
         }
     }
@@ -759,13 +766,16 @@ fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<V
 // Builtin dispatch — delegate to existing stdlib via name
 // =============================================================================
 
+thread_local! {
+    static DISPATCH_EVAL: std::cell::RefCell<crate::eval::Evaluator> =
+        std::cell::RefCell::new(crate::eval::Evaluator::new());
+}
+
 fn dispatch_builtin(name: &str, args: Vec<Value>) -> Result<Value, ExecError> {
-    // The stdlib requires an Evaluator for IO/effects, but pure builtins work
-    // with a no-op evaluator. For Phase 4b we call into the stdlib directly.
-    // IO-effect builtins (Http, Task, Channel) are handled separately when needed.
-    let mut eval = crate::eval::Evaluator::new();
-    stdlib::dispatch(name, args, &mut eval)
-        .map_err(|e| ExecError::new(e.message))
+    DISPATCH_EVAL.with(|e| {
+        stdlib::dispatch(name, args, &mut e.borrow_mut())
+            .map_err(|e| ExecError::new(e.message))
+    })
 }
 
 // =============================================================================
@@ -830,10 +840,10 @@ fn fn_ref_name(v: &Value) -> Result<String, ExecError> {
 
 /// Build the merged record `{ it: arg, cap1: v1, cap2: v2, ... }` passed to a
 /// lifted closure function.
-fn build_closure_call_arg(arg: Value, captures: Vec<(String, Value)>) -> Value {
+fn build_closure_call_arg(arg: Value, captures: &[(String, Value)]) -> Value {
     let mut fields = Vec::with_capacity(1 + captures.len());
     fields.push(("it".to_string(), arg));
-    fields.extend(captures);
+    fields.extend(captures.iter().map(|(k, v)| (k.clone(), v.clone())));
     Value::Record(fields)
 }
 
@@ -854,7 +864,7 @@ fn exec_fold_closure(
             ("acc".to_string(), acc),
             ("item".to_string(), item),
         ]);
-        let merged = build_closure_call_arg(step_arg, captures.clone());
+        let merged = build_closure_call_arg(step_arg, &captures);
         acc = execute(module, fn_idx, merged)?;
     }
     Ok(acc)
@@ -872,7 +882,7 @@ fn exec_map_closure(
     };
     let mut result = Vec::with_capacity(items.len());
     for item in items {
-        let merged = build_closure_call_arg(item, captures.clone());
+        let merged = build_closure_call_arg(item, &captures);
         result.push(execute(module, fn_idx, merged)?);
     }
     Ok(Value::List(Rc::new(result)))
@@ -890,7 +900,7 @@ fn exec_filter_closure(
     };
     let mut result = Vec::new();
     for item in items {
-        let merged = build_closure_call_arg(item.clone(), captures.clone());
+        let merged = build_closure_call_arg(item.clone(), &captures);
         if execute(module, fn_idx, merged)? == Value::Bool(true) {
             result.push(item);
         }
@@ -917,9 +927,9 @@ fn exec_fold_until_closure(
             ("acc".to_string(), acc),
             ("item".to_string(), item),
         ]);
-        let step_merged = build_closure_call_arg(step_arg, step_captures.clone());
+        let step_merged = build_closure_call_arg(step_arg, &step_captures);
         acc = execute(module, step_idx, step_merged)?;
-        let stop_merged = build_closure_call_arg(acc.clone(), stop_captures.clone());
+        let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
         if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
             break;
         }
@@ -939,14 +949,16 @@ fn exec_fold_until_mixed(
         Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
+    let step_idx = module.fn_idx(step_name)
+        .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", step_name)))?;
     let mut acc = init;
     for item in items {
         let arg = Value::Record(vec![
             ("acc".to_string(), acc),
             ("item".to_string(), item),
         ]);
-        acc = execute_fn(module, step_name, arg)?;
-        let stop_merged = build_closure_call_arg(acc.clone(), stop_captures.clone());
+        acc = execute(module, step_idx, arg)?;
+        let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
         if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
             break;
         }
@@ -965,6 +977,8 @@ fn exec_map_fold_user(
         Value::Map(m) => m,
         _ => return Err(ExecError::new("Map.fold: expected Map")),
     };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("Map.fold: unknown fn '{}'", fn_name)))?;
     let mut acc = init;
     for (k, v) in entries.iter() {
         let arg = Value::Record(vec![
@@ -972,7 +986,7 @@ fn exec_map_fold_user(
             ("key".to_string(), k.clone()),
             ("value".to_string(), v.clone()),
         ]);
-        acc = execute_fn(module, fn_name, arg)?;
+        acc = execute(module, fn_idx, arg)?;
     }
     Ok(acc)
 }
@@ -996,7 +1010,7 @@ fn exec_map_fold_closure(
             ("key".to_string(), k.clone()),
             ("value".to_string(), v.clone()),
         ]);
-        let merged = build_closure_call_arg(step_arg, captures.clone());
+        let merged = build_closure_call_arg(step_arg, &captures);
         acc = execute(module, fn_idx, merged)?;
     }
     Ok(acc)

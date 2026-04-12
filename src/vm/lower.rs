@@ -1456,8 +1456,9 @@ impl Lowerer {
     /// The lifted function's single input (R0) is a record:
     ///   `{ it: <original_arg>, cap_name1: v1, cap_name2: v2, ... }`
     ///
-    /// The function extracts `it` and each capture via FieldGetNamed, then
-    /// lowers `body` in tail position.
+    /// `it` is always at index 0; captures are at indices 1..K. Layout is
+    /// fixed by `build_closure_call_arg`, so we emit positional `FieldGet`
+    /// instead of `FieldGetNamed` — zero string work at runtime.
     fn lower_closure_body(
         &mut self,
         lifted_name: &str,
@@ -1467,17 +1468,15 @@ impl Lowerer {
         let mut ctx = FnCtx::new(lifted_name);
         // R0 = merged record { it: <arg>, cap1: v1, ... }
 
-        // Bind "it" = R0.it
+        // Bind "it" = R0[0]  (always first in build_closure_call_arg)
         let it_reg = ctx.alloc_named_reg("it");
-        let it_idx = self.module.constants.intern_str("it");
-        ctx.emit(Instruction::FieldGetNamed { dst: it_reg, src: 0, name_idx: it_idx });
+        ctx.emit(Instruction::FieldGet { dst: it_reg, src: 0, field_idx: 0 });
         ctx.bind_var("it", it_reg);
 
-        // Bind each captured variable from its field in R0.
-        for (cap_name, _) in captures {
+        // Bind each captured variable positionally: capture k is at index k+1.
+        for (k, (cap_name, _)) in captures.iter().enumerate() {
             let cap_reg = ctx.alloc_named_reg(cap_name);
-            let name_idx = self.module.constants.intern_str(cap_name);
-            ctx.emit(Instruction::FieldGetNamed { dst: cap_reg, src: 0, name_idx });
+            ctx.emit(Instruction::FieldGet { dst: cap_reg, src: 0, field_idx: k + 1 });
             ctx.bind_var(cap_name, cap_reg);
         }
 
