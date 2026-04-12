@@ -875,7 +875,23 @@ impl Checker {
             }
 
             ast::Expr::Paren(inner, _) => self.infer_expr(inner),
-            ast::Expr::ClosureExpr { output_type, .. } => self.resolve_type_expr(output_type, &[]),
+            ast::Expr::ClosureExpr { name, effects, input_type, output_type, body, rest, span } => {
+                let eff = EffectSet::from_names(&effects.effects);
+                let inp = self.resolve_type_expr(input_type, &[]);
+                let out = self.resolve_type_expr(output_type, &[]);
+                self.env.register_fn(name, FnSig { effects: eff.clone(), input: inp.clone(), output: out.clone() });
+
+                let prev_effects = self.current_effects.clone();
+                self.current_effects = eff;
+                self.env.push_scope();
+                self.env.bind("it", inp);
+                let body_type = self.infer_expr(body);
+                self.check_assignable(&body_type, &out, span);
+                self.env.pop_scope();
+                self.current_effects = prev_effects;
+
+                self.infer_expr(rest)
+            }
         }
     }
 

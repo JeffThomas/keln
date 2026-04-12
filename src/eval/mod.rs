@@ -52,7 +52,7 @@ pub enum Value {
     Str(String),
     Bytes(Vec<u8>),
     Unit,
-    List(Vec<Value>),
+    List(Rc<Vec<Value>>),
     /// Product type or anonymous record: ordered field list
     Record(Vec<(String, Value)>),
     /// Sum type variant: Ok(5), None, Running { attempt: 1 }
@@ -69,10 +69,10 @@ pub enum Value {
     Timestamp(i64),
     /// Completed task result (sync model)
     Task(Box<Value>),
-    /// Key-value map backed by BTreeMap for O(log n) operations
-    Map(BTreeMap<Value, Value>),
-    /// Unique set backed by BTreeSet for O(log n) operations
-    Set(BTreeSet<Value>),
+    /// Key-value map backed by BTreeMap for O(log n) operations; Rc for O(1) clone
+    Map(Rc<BTreeMap<Value, Value>>),
+    /// Unique set backed by BTreeSet for O(log n) operations; Rc for O(1) clone
+    Set(Rc<BTreeSet<Value>>),
     /// Compile-time phantom type descriptor — runtime representation of TypeRef<T>.
     /// Value is the type name string (e.g. "JobMessage", "Int").
     TypeRef(String),

@@ -1,0 +1,30 @@
+-- AoC 2019 Day 1a: The Tyranny of the Rocket Equation (Part Two)
+--
+-- Fuel itself requires fuel. Recursively compute fuel(mass) = floor(mass/3) - 2,
+-- summing until the result is <= 0. Sum over all modules.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        List.fold(lines, 0, fuelStep)
+
+    helpers: {
+        fuelFor :: Pure Int -> Int =>
+            let f = it / 3 - 2 in
+            match f <= 0 {
+                true  -> 0
+                false -> f + fuelFor(f)
+            }
+
+        fuelStep :: Pure { acc: Int, item: String } -> Int =>
+            let mass = Result.unwrapOr(Int.parse(String.trim(it.item)), 0) in
+            it.acc + fuelFor(mass)
+    }
+
+    verify: {
+        given("samples/advent_of_code/2019/day_1a/input.txt") -> 4736213
+    }
+}

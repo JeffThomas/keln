@@ -17,6 +17,7 @@ multi-file composition. All functions, types, and modules are declared in one
 The toolchain commands you will use:
 ```
 keln verify  <file>              -- run verify blocks; emit VerificationResult JSON
+keln check   <file>              -- parse only; confirms no syntax errors (fast)
 keln run     <file> --fn <name> --arg '<json>'
 keln compile <file> --entry <name>
 keln run-bc  <file.kbc>
@@ -35,6 +36,18 @@ not block `is_clean`.
 ## 2. Function Declaration — Mandatory Structure
 
 Every function uses this exact structure. No shortcuts.
+
+**Generic functions** — declare type parameters in square brackets after the name:
+```keln
+fn keepIf [T, E] {
+    E { items: List<T>, predicate: FunctionRef<E, T, Bool> } -> List<T>
+    in:  { items, predicate }
+    out: List.filter(items, predicate)
+    confidence: auto
+    reason: "delegates to List.filter"
+}
+```
+Effect variables (`E`) and type variables (`T`, `U`) go in the same `[...]` list. In practice AI-authored programs rarely need generic functions — stdlib covers the common cases.
 
 ```keln
 fn <name> {
@@ -331,9 +344,12 @@ Maybe.none      { Pure Unit                                     -> Maybe<T>     
 Maybe.map       { Maybe<T>, FunctionRef<E,T,U>                  -> Maybe<U>     | E  }
 Maybe.bind      { Maybe<T>, FunctionRef<E,T,Maybe<U>>           -> Maybe<U>     | E  }
 Maybe.require   { Pure Maybe<T>, E                              -> Result<T,E>       }
+Maybe.getOr     { Pure Maybe<T>, T                              -> T                }
 Maybe.unwrapOr  { Pure Maybe<T>, T                              -> T                }
+Maybe.isSome    { Pure Maybe<T>                                 -> Bool             }
+Maybe.isNone    { Pure Maybe<T>                                 -> Bool             }
 ```
-Note: `Maybe.none(Unit)` — pass `Unit` explicitly.
+Note: `Maybe.none(Unit)` — pass `Unit` explicitly. `Maybe.getOr` and `Maybe.unwrapOr` are aliases — both extract the value or return the default.
 
 ### List
 ```keln
@@ -343,6 +359,7 @@ List.fold         { List<T>, U, FunctionRef<E,{U,T},U>   -> U                | E
 List.find         { List<T>, FunctionRef<E,T,Bool>       -> Maybe<T>         | E }
 List.sequence     { Pure List<Result<T,E>>               -> Result<List<T>,E>    }
 List.head         { Pure List<T>                         -> Maybe<T>             }
+List.getOr        { Pure List<T>, Int, T                  -> T                    }
 List.tail         { Pure List<T>                         -> List<T>              }
 List.isEmpty      { Pure List<T>                         -> Bool                 }
 List.len          { Pure List<T>                         -> Int                  }
@@ -364,6 +381,8 @@ List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:
 List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U,Bool> -> U | E }
 ```
 
+**`List.getOr(list, i, default)`** — safe indexed access; returns `list[i]` or `default` if out of bounds. Replaces `Maybe.getOr(List.head(List.drop(list, i)), default)`.
+
 **`List.tail` returns `List<T>` directly — NOT `Maybe<List<T>>`.** Do not wrap it in `Maybe.getOr`.
 
 **`List.prepend(list, item)`** — first arg is the list; item goes to the front.
@@ -379,6 +398,7 @@ List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U
 Map.empty       { Pure Unit                                         -> Map<K,V>             }
 Map.insert      { Pure Map<K,V>, K, V                               -> Map<K,V>             }
 Map.get         { Pure Map<K,V>, K                                  -> Maybe<V>             }
+Map.getOr       { Pure Map<K,V>, K, V                               -> V                    }
 Map.remove      { Pure Map<K,V>, K                                  -> Map<K,V>             }
 Map.contains    { Pure Map<K,V>, K                                  -> Bool                 }
 Map.keys        { Pure Map<K,V>                                     -> List<K>              }
@@ -396,6 +416,8 @@ produce a proper empty map. `Map.fromList([])` remains a valid alternative.
 
 **`Map.toList` field name is `value`, not `val`** — items are `{ key: K, value: V }`. Do not use `.val`.
 
+**`Map.getOr(map, key, default)`** — returns `map[key]` or `default` if absent. Replaces `Maybe.getOr(Map.get(map, key), default)`.
+
 **`Map.fold(map, init, fn)`** — like `List.fold` but iterates over key-value pairs. The callback receives `{ acc: A, key: K, value: V }` directly (no `.item` nesting). Prefer this over `Map.toList` + `List.fold` when you only need to reduce the map.
 
 ### Set
@@ -412,25 +434,49 @@ Set.difference  { Pure Set<T>, Set<T>                  -> Set<T>               }
 Set.size        { Pure Set<T>                          -> Int                  }
 ```
 
+**Performance — Map, Set, and List are copy-on-write (Rc-backed):**
+Cloning a `Map`, `Set`, or `List` value is O(1) — it bumps a reference count, not the data. Mutation (`Map.insert`, `Set.insert`, `List.append`, etc.) is O(log N) or O(1) amortized in-place when you are the sole owner (the normal case inside a fold step). A full data copy only happens when the same value is referenced from two places simultaneously. This means `Map`, `Set`, and `List` are safe and efficient as fold accumulators.
+
+**However:** if a large `Map`, `Set`, or `List` is **read-only** during a fold, keep it *out* of the accumulator entirely — capture it via a named capturing helper instead. See §10a.
+
 ### String
 ```keln
-String.trim      { Pure String               -> String         }
-String.lowercase { Pure String               -> String         }
-String.uppercase { Pure String               -> String         }
-String.split     { Pure String, String       -> List<String>   }
-String.join      { Pure List<String>, String -> String         }
-String.length    { Pure String               -> Int            }
-String.contains  { Pure String, String       -> Bool           }
-String.toString  { Pure T                    -> String         }
+String.trim        { Pure String                    -> String         }
+String.trimStart   { Pure String                    -> String         }
+String.trimEnd     { Pure String                    -> String         }
+String.lowercase   { Pure String                    -> String         }
+String.uppercase   { Pure String                    -> String         }
+String.split       { Pure String, String            -> List<String>   }
+String.join        { Pure List<String>, String      -> String         }
+String.length      { Pure String                    -> Int            }
+String.isEmpty     { Pure String                    -> Bool           }
+String.contains    { Pure String, String            -> Bool           }
+String.startsWith  { Pure String, String            -> Bool           }
+String.endsWith    { Pure String, String            -> Bool           }
+String.chars       { Pure String                    -> List<String>   }
+String.indexOf     { Pure String, String            -> Maybe<Int>     }
+String.slice       { Pure String, Int, Int          -> String         }
+String.replace     { Pure String, String, String    -> String         }
+String.toString    { Pure T                         -> String         }
 ```
+
+**`String.chars(s)`** — splits into `List<String>` of single-character strings. Use for character-level parsing.
+
+**`String.indexOf(s, sub)`** — returns `Maybe<Int>` (char-based index, not byte). Returns `None` if not found.
+
+**`String.slice(s, start, end)`** — char-based indices; returns substring `[start, end)`.
+
+**`String.replace(s, from, to)`** — replaces all occurrences of `from` with `to`.
 
 ### Int
 ```keln
+Int.parse       { Pure String                -> Result<Int, String> }
 Int.toString    { Pure Int                   -> String         }
 Int.toFloat     { Pure Int                   -> Float          }
 Int.abs         { Pure Int                   -> Int            }
 Int.min         { Pure Int, Int              -> Int            }
 Int.max         { Pure Int, Int              -> Int            }
+Int.clamp       { Pure Int, Int, Int         -> Int            }
 Int.pow         { Pure Int, Int where >= 0   -> Int            }
 ```
 
@@ -635,15 +681,55 @@ fn sumWithOffset {
 List.fold(args.items, { acc: 0, offset: args.offset }, addWithOffset)
 ```
 
+**Critical performance rule — read-only lookup tables:**
+If a large `Set`, `Map`, or `List` is only *read* (never updated) inside a fold, **do not put it in the accumulator**. Put it in a capturing helper instead:
+```keln
+-- BAD: pts1 (100k entries) is in the accumulator and read-only;
+-- it gets snapshotted into every step call, causing severe slowdown
+let init = { x: 0, y: 0, pts1: pts1, result: 0 } in
+List.fold(items, init, step)
+
+-- GOOD: pts1 is captured once at closure definition time, zero overhead per step
+let step :: Pure { acc: { x: Int, y: Int, result: Int }, item: Int } -> { ... } =>
+    let hit = Set.contains(pts1, it.item) in   -- pts1 captured, not in acc
+    ...
+in
+List.fold(items, { x: 0, y: 0, result: 0 }, step)
+```
+
 **Rules:**
 - `it` is the single argument inside the body — same as top-level helpers
 - The captured environment is snapshotted at definition time; later
   mutations to bindings are NOT reflected in the closure
 - Closures are first-class: passable, storable in records, returned from functions
-- **Only supported in `keln verify` and `keln run`** (tree-walking evaluator).
-  Using `let name ::` and then `keln compile` produces a compile error.
+- **Supported everywhere**: `keln verify`, `keln run`, and `keln compile`/`keln run-bc` (bytecode VM). Gap 17 added closure lifting to the VM.
 - **`threshold` is a reserved keyword** — do not use it as a field or variable name.
   Use `cutoff`, `limit`, `max_val`, etc. instead.
+
+**Eliminating `it.acc.` indirection in fold helpers — record destructuring in `let`:**
+```keln
+let step :: Pure { acc: State, item: Int } -> State =>
+    let { mem, ip, done } = it.acc in
+    -- now use mem, ip, done directly instead of it.acc.mem, it.acc.ip, it.acc.done
+    ...
+in
+List.fold(ops, init, step)
+```
+`let { f1, f2, f3 } = expr in body` is a full record destructuring — all named fields are bound. Works in both tree-walker and bytecode VM. Use shorthand syntax: `{ mem, ip }` binds `mem` and `ip` to their values. Use `{ field: otherName }` to rename.
+
+**Record update with `.with()` (Gap 11+18):**
+```keln
+state.with(count: state.count + 1)            -- update one field
+state.with({ count: 0, label: "reset" })      -- update multiple fields
+state.with(count: 0).with(label: "reset")    -- chained
+```
+Works in tree-walker AND bytecode VM. Use this to eliminate fold accumulator bloat:
+```keln
+-- BEFORE: rewrite all fields
+{ acc: it.acc + 1, w: it.w, h: it.h, board: it.board }
+-- AFTER: update only what changed
+it.with(acc: it.acc + 1)
+```
 
 ---
 
@@ -820,6 +906,7 @@ Omitting step 1 causes the compiler to emit index `u16::MAX`, which resolves to
 | Recursive algorithm through a capturing closure (DFS, tree walk) causes `STATUS_STACK_OVERFLOW` in `dev` build even for shallow depth | Replace with iterative fixpoint (round-based DP with `List.foldUntil`) | Debug-mode Rust frames are ~10× larger than release; the 64 MB main-thread stack (added in Gap 15 fix) raises the limit but deep unbounded recursion still risks overflow |
 | Missing closing `}` inside a `match` arm body | Count braces; add the missing `}` before `confidence:` | Parser reports `"expected pattern at N:M"` pointing at the next function-level keyword (`confidence:`, `reason:`, `verify:`) — not at the unclosed brace |
 | `keln verify` crashes with no error message (STATUS_STACK_OVERFLOW, wrong output, silent failure) | Run `keln check <file>` first | `keln check` runs only the parser and prints `ok` or a parse error; if it prints `ok` the problem is in the evaluator, not the source |
+| Fold runs for minutes/hours on large input | Move read-only `Set`/`Map`/`List` out of the accumulator into a capturing closure | Even with O(1) Rc clone, a value present in both the accumulator AND a mutation site forces a data copy per step; a captured value is snapshotted once and never re-copied |
 
 ---
 

@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use super::{RuntimeError, Value, VariantPayload};
 use super::eval::Evaluator;
 
@@ -32,6 +33,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.len"
             | "List.length"
             | "List.head"
+            | "List.getOr"
             | "List.tail"
             | "List.append"
             | "List.prepend"
@@ -135,6 +137,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Map.empty"
             | "Map.insert"
             | "Map.get"
+            | "Map.getOr"
             | "Map.remove"
             | "Map.contains"
             | "Map.keys"
@@ -259,7 +262,7 @@ pub fn dispatch(
             match v {
                 Value::List(items) => {
                     let mut oks = Vec::new();
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         match item {
                             Value::Variant { name, payload: VariantPayload::Tuple(inner) }
                                 if name == "Ok" =>
@@ -272,7 +275,7 @@ pub fn dispatch(
                             other => oks.push(other),
                         }
                     }
-                    Ok(ok(Value::List(oks)))
+                    Ok(ok(Value::List(Rc::new(oks))))
                 }
                 _ => Err(RuntimeError::new("Result.sequence: expected List")),
             }
@@ -358,10 +361,10 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut result = Vec::with_capacity(items.len());
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         result.push(ev.call_value(f.clone(), item, &sp())?);
                     }
-                    Ok(Value::List(result))
+                    Ok(Value::List(Rc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.map: expected List")),
             }
@@ -371,12 +374,12 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut result = Vec::new();
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         if ev.call_value(f.clone(), item.clone(), &sp())? == Value::Bool(true) {
                             result.push(item);
                         }
                     }
-                    Ok(Value::List(result))
+                    Ok(Value::List(Rc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.filter: expected List")),
             }
@@ -387,7 +390,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         let arg = Value::Record(vec![
                             ("acc".to_string(), acc),
                             ("item".to_string(), item),
@@ -402,7 +405,8 @@ pub fn dispatch(
         "List.foldr" => {
             let (list, init, f) = three(args, "List.foldr")?;
             match list {
-                Value::List(mut items) => {
+                Value::List(items) => {
+                    let mut items = Rc::unwrap_or_clone(items);
                     items.reverse();
                     let mut acc = init;
                     for item in items {
@@ -434,24 +438,33 @@ pub fn dispatch(
         "List.head" => {
             let v = one(args, "List.head")?;
             match v {
-                Value::List(mut items) => {
-                    if items.is_empty() {
-                        Ok(none())
-                    } else {
-                        Ok(some(items.remove(0)))
-                    }
+                Value::List(items) => {
+                    Ok(items.first().map_or_else(none, |v| some(v.clone())))
                 }
                 _ => Err(RuntimeError::new("List.head: expected List")),
+            }
+        }
+        "List.getOr" => {
+            let (lst, idx, default) = three(args, "List.getOr")?;
+            match (lst, idx) {
+                (Value::List(items), Value::Int(i)) => {
+                    if i < 0 || i as usize >= items.len() {
+                        Ok(default)
+                    } else {
+                        Ok(items[i as usize].clone())
+                    }
+                }
+                _ => Err(RuntimeError::new("List.getOr: expected List, Int, default")),
             }
         }
         "List.tail" => {
             let v = one(args, "List.tail")?;
             match v {
-                Value::List(mut items) => {
-                    if !items.is_empty() {
-                        items.remove(0);
+                Value::List(mut rc) => {
+                    if !rc.is_empty() {
+                        Rc::make_mut(&mut rc).remove(0);
                     }
-                    Ok(Value::List(items))
+                    Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.tail: expected List")),
             }
@@ -459,9 +472,9 @@ pub fn dispatch(
         "List.append" => {
             let (list, item) = two(args, "List.append")?;
             match list {
-                Value::List(mut items) => {
-                    items.push(item);
-                    Ok(Value::List(items))
+                Value::List(mut rc) => {
+                    Rc::make_mut(&mut rc).push(item);
+                    Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.append: expected List")),
             }
@@ -469,9 +482,9 @@ pub fn dispatch(
         "List.prepend" => {
             let (list, item) = two(args, "List.prepend")?;
             match list {
-                Value::List(mut items) => {
-                    items.insert(0, item);
-                    Ok(Value::List(items))
+                Value::List(mut rc) => {
+                    Rc::make_mut(&mut rc).insert(0, item);
+                    Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.prepend: expected List")),
             }
@@ -479,9 +492,9 @@ pub fn dispatch(
         "List.concat" => {
             let (a, b) = two(args, "List.concat")?;
             match (a, b) {
-                (Value::List(mut a), Value::List(b)) => {
-                    a.extend(b);
-                    Ok(Value::List(a))
+                (Value::List(mut rc_a), Value::List(rc_b)) => {
+                    Rc::make_mut(&mut rc_a).extend(Rc::unwrap_or_clone(rc_b));
+                    Ok(Value::List(rc_a))
                 }
                 _ => Err(RuntimeError::new("List.concat: expected two Lists")),
             }
@@ -489,9 +502,9 @@ pub fn dispatch(
         "List.reverse" => {
             let v = one(args, "List.reverse")?;
             match v {
-                Value::List(mut items) => {
-                    items.reverse();
-                    Ok(Value::List(items))
+                Value::List(mut rc) => {
+                    Rc::make_mut(&mut rc).reverse();
+                    Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.reverse: expected List")),
             }
@@ -500,7 +513,7 @@ pub fn dispatch(
             let (list, f) = two(args, "List.find")?;
             match list {
                 Value::List(items) => {
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         if ev.call_value(f.clone(), item.clone(), &sp())? == Value::Bool(true) {
                             return Ok(some(item));
                         }
@@ -521,7 +534,7 @@ pub fn dispatch(
             let (list, n) = two(args, "List.take")?;
             match (list, n) {
                 (Value::List(items), Value::Int(n)) => {
-                    Ok(Value::List(items.into_iter().take(n.max(0) as usize).collect()))
+                    Ok(Value::List(Rc::new(items.iter().take(n.max(0) as usize).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("List.take: expected List and Int")),
             }
@@ -530,7 +543,7 @@ pub fn dispatch(
             let (list, n) = two(args, "List.drop")?;
             match (list, n) {
                 (Value::List(items), Value::Int(n)) => {
-                    Ok(Value::List(items.into_iter().skip(n.max(0) as usize).collect()))
+                    Ok(Value::List(Rc::new(items.iter().skip(n.max(0) as usize).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("List.drop: expected List and Int")),
             }
@@ -538,17 +551,17 @@ pub fn dispatch(
         "List.zip" => {
             let (a, b) = two(args, "List.zip")?;
             match (a, b) {
-                (Value::List(a), Value::List(b)) => Ok(Value::List(
-                    a.into_iter()
-                        .zip(b)
+                (Value::List(a), Value::List(b)) => Ok(Value::List(Rc::new(
+                    a.iter()
+                        .zip(b.iter())
                         .map(|(x, y)| {
                             Value::Record(vec![
-                                ("fst".to_string(), x),
-                                ("snd".to_string(), y),
+                                ("fst".to_string(), x.clone()),
+                                ("snd".to_string(), y.clone()),
                             ])
                         })
                         .collect(),
-                )),
+                ))),
                 _ => Err(RuntimeError::new("List.zip: expected two Lists")),
             }
         }
@@ -557,13 +570,13 @@ pub fn dispatch(
             match v {
                 Value::List(items) => {
                     let mut result = Vec::new();
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         match item {
-                            Value::List(inner) => result.extend(inner),
+                            Value::List(inner) => result.extend(Rc::unwrap_or_clone(inner)),
                             other => result.push(other),
                         }
                     }
-                    Ok(Value::List(result))
+                    Ok(Value::List(Rc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.flatten: expected List")),
             }
@@ -573,7 +586,7 @@ pub fn dispatch(
             let (start, end) = two(args, "List.range")?;
             match (start, end) {
                 (Value::Int(s), Value::Int(e)) => {
-                    Ok(Value::List((s..e).map(Value::Int).collect()))
+                    Ok(Value::List(Rc::new((s..e).map(Value::Int).collect())))
                 }
                 _ => Err(RuntimeError::new("List.range: expected two Ints")),
             }
@@ -584,7 +597,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         let record = Value::Record(vec![
                             ("acc".to_string(), acc),
                             ("item".to_string(), item),
@@ -608,7 +621,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         let record = Value::Record(vec![
                             ("acc".to_string(), acc),
                             ("item".to_string(), item),
@@ -632,7 +645,7 @@ pub fn dispatch(
             let (value, count) = two(args, "List.repeat")?;
             match count {
                 Value::Int(n) if n >= 0 => {
-                    Ok(Value::List(vec![value; n as usize]))
+                    Ok(Value::List(Rc::new(vec![value; n as usize])))
                 }
                 Value::Int(n) => Err(RuntimeError::new(format!(
                     "List.repeat: count must be >= 0, got {}", n
@@ -647,9 +660,9 @@ pub fn dispatch(
         "List.sort" => {
             let v = one(args, "List.sort")?;
             match v {
-                Value::List(mut items) => {
-                    items.sort();
-                    Ok(Value::List(items))
+                Value::List(mut rc) => {
+                    Rc::make_mut(&mut rc).sort();
+                    Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.sort: expected List")),
             }
@@ -677,7 +690,7 @@ pub fn dispatch(
                             result.push(Value::Record(rec));
                         }
                     }
-                    Ok(Value::List(result))
+                    Ok(Value::List(Rc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.combinations2: expected List")),
             }
@@ -888,11 +901,11 @@ pub fn dispatch(
         "String.split" => {
             let (s, sep) = two(args, "String.split")?;
             match (s, sep) {
-                (Value::Str(s), Value::Str(sep)) => Ok(Value::List(
+                (Value::Str(s), Value::Str(sep)) => Ok(Value::List(Rc::new(
                     s.split(sep.as_str())
                         .map(|p| Value::Str(p.to_string()))
                         .collect(),
-                )),
+                ))),
                 _ => Err(RuntimeError::new("String.split: expected String, String")),
             }
         }
@@ -913,9 +926,9 @@ pub fn dispatch(
         "String.chars" => {
             let v = one(args, "String.chars")?;
             match v {
-                Value::Str(s) => Ok(Value::List(
+                Value::Str(s) => Ok(Value::List(Rc::new(
                     s.chars().map(|c| Value::Str(c.to_string())).collect(),
-                )),
+                ))),
                 _ => Err(RuntimeError::new("String.chars: expected String")),
             }
         }
@@ -1045,22 +1058,22 @@ pub fn dispatch(
         "Task.awaitAll" => {
             let v = one(args, "Task.awaitAll")?;
             match v {
-                Value::List(tasks) => Ok(Value::List(
-                    tasks
+                Value::List(tasks) => Ok(Value::List(Rc::new(
+                    Rc::unwrap_or_clone(tasks)
                         .into_iter()
                         .map(|t| match t {
                             Value::Task(inner) => *inner,
                             other => other,
                         })
                         .collect(),
-                )),
+                ))),
                 _ => Err(RuntimeError::new("Task.awaitAll: expected List")),
             }
         }
         "Task.awaitFirst" | "Task.race" => {
             let v = one(args, name)?;
             match v {
-                Value::List(mut tasks) if !tasks.is_empty() => match tasks.remove(0) {
+                Value::List(mut rc) if !rc.is_empty() => match Rc::make_mut(&mut rc).remove(0) {
                     Value::Task(inner) => Ok(*inner),
                     other => Ok(other),
                 },
@@ -1306,7 +1319,7 @@ pub fn dispatch(
         // =====================================================================
         // Map<K,V>
         // =====================================================================
-        "Map.empty" => Ok(Value::Map(std::collections::BTreeMap::new())),
+        "Map.empty" => Ok(Value::Map(Rc::new(std::collections::BTreeMap::new()))),
         "Map.size" => {
             let v = one(args, "Map.size")?;
             match v {
@@ -1317,9 +1330,9 @@ pub fn dispatch(
         "Map.insert" => {
             let (map, key, val) = three(args, "Map.insert")?;
             match map {
-                Value::Map(mut map) => {
-                    map.insert(key, val);
-                    Ok(Value::Map(map))
+                Value::Map(mut rc) => {
+                    Rc::make_mut(&mut rc).insert(key, val);
+                    Ok(Value::Map(rc))
                 }
                 _ => Err(RuntimeError::new("Map.insert: expected Map as first arg")),
             }
@@ -1334,12 +1347,19 @@ pub fn dispatch(
                 _ => Err(RuntimeError::new("Map.get: expected Map")),
             }
         }
+        "Map.getOr" => {
+            let (map, key, default) = three(args, "Map.getOr")?;
+            match map {
+                Value::Map(map) => Ok(map.get(&key).cloned().unwrap_or(default)),
+                _ => Err(RuntimeError::new("Map.getOr: expected Map")),
+            }
+        }
         "Map.remove" => {
             let (map, key) = two(args, "Map.remove")?;
             match map {
-                Value::Map(mut map) => {
-                    map.remove(&key);
-                    Ok(Value::Map(map))
+                Value::Map(mut rc) => {
+                    Rc::make_mut(&mut rc).remove(&key);
+                    Ok(Value::Map(rc))
                 }
                 _ => Err(RuntimeError::new("Map.remove: expected Map")),
             }
@@ -1354,25 +1374,25 @@ pub fn dispatch(
         "Map.keys" => {
             let v = one(args, "Map.keys")?;
             match v {
-                Value::Map(map) => Ok(Value::List(map.into_keys().collect())),
+                Value::Map(rc) => Ok(Value::List(Rc::new(rc.keys().cloned().collect()))),
                 _ => Err(RuntimeError::new("Map.keys: expected Map")),
             }
         }
         "Map.values" => {
             let v = one(args, "Map.values")?;
             match v {
-                Value::Map(map) => Ok(Value::List(map.into_values().collect())),
+                Value::Map(rc) => Ok(Value::List(Rc::new(rc.values().cloned().collect()))),
                 _ => Err(RuntimeError::new("Map.values: expected Map")),
             }
         }
         "Map.toList" => {
             let v = one(args, "Map.toList")?;
             match v {
-                Value::Map(map) => Ok(Value::List(
-                    map.into_iter().map(|(k, v)| {
-                        Value::Record(vec![("key".to_string(), k), ("value".to_string(), v)])
+                Value::Map(rc) => Ok(Value::List(Rc::new(
+                    rc.iter().map(|(k, v)| {
+                        Value::Record(vec![("key".to_string(), k.clone()), ("value".to_string(), v.clone())])
                     }).collect()
-                )),
+                ))),
                 _ => Err(RuntimeError::new("Map.toList: expected Map")),
             }
         }
@@ -1382,11 +1402,11 @@ pub fn dispatch(
             match map {
                 Value::Map(entries) => {
                     let mut acc = init;
-                    for (k, v) in entries {
+                    for (k, v) in entries.iter() {
                         let record = Value::Record(vec![
                             ("acc".to_string(), acc),
-                            ("key".to_string(), k),
-                            ("value".to_string(), v),
+                            ("key".to_string(), k.clone()),
+                            ("value".to_string(), v.clone()),
                         ]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                     }
@@ -1401,7 +1421,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     #[allow(clippy::mutable_key_type)]
                     let mut map = std::collections::BTreeMap::new();
-                    for item in items {
+                    for item in Rc::unwrap_or_clone(items) {
                         match item {
                             Value::Record(mut fields) if fields.len() >= 2 => {
                                 let (_, key) = fields.remove(0);
@@ -1411,7 +1431,7 @@ pub fn dispatch(
                             _ => return Err(RuntimeError::new("Map.fromList: each item must be {key, value}")),
                         }
                     }
-                    Ok(Value::Map(map))
+                    Ok(Value::Map(Rc::new(map)))
                 }
                 _ => Err(RuntimeError::new("Map.fromList: expected List")),
             }
@@ -1419,9 +1439,13 @@ pub fn dispatch(
         "Map.merge" => {
             let (a, b) = two(args, "Map.merge")?;
             match (a, b) {
-                (Value::Map(mut map_a), Value::Map(map_b)) => {
-                    map_a.extend(map_b);
-                    Ok(Value::Map(map_a))
+                #[allow(clippy::mutable_key_type)]
+                (Value::Map(mut rc_a), Value::Map(rc_b)) => {
+                    let map_a = Rc::make_mut(&mut rc_a);
+                    for (k, v) in rc_b.iter() {
+                        map_a.insert(k.clone(), v.clone());
+                    }
+                    Ok(Value::Map(rc_a))
                 }
                 _ => Err(RuntimeError::new("Map.merge: expected two Maps")),
             }
@@ -1430,7 +1454,7 @@ pub fn dispatch(
         // =====================================================================
         // Set<T>
         // =====================================================================
-        "Set.empty" => Ok(Value::Set(std::collections::BTreeSet::new())),
+        "Set.empty" => Ok(Value::Set(Rc::new(std::collections::BTreeSet::new()))),
         "Set.size" => {
             let v = one(args, "Set.size")?;
             match v {
@@ -1441,9 +1465,9 @@ pub fn dispatch(
         "Set.insert" => {
             let (set, item) = two(args, "Set.insert")?;
             match set {
-                Value::Set(mut set) => {
-                    set.insert(item);
-                    Ok(Value::Set(set))
+                Value::Set(mut rc) => {
+                    Rc::make_mut(&mut rc).insert(item);
+                    Ok(Value::Set(rc))
                 }
                 _ => Err(RuntimeError::new("Set.insert: expected Set")),
             }
@@ -1458,9 +1482,9 @@ pub fn dispatch(
         "Set.remove" => {
             let (set, item) = two(args, "Set.remove")?;
             match set {
-                Value::Set(mut set) => {
-                    set.remove(&item);
-                    Ok(Value::Set(set))
+                Value::Set(mut rc) => {
+                    Rc::make_mut(&mut rc).remove(&item);
+                    Ok(Value::Set(rc))
                 }
                 _ => Err(RuntimeError::new("Set.remove: expected Set")),
             }
@@ -1468,14 +1492,14 @@ pub fn dispatch(
         "Set.toList" => {
             let v = one(args, "Set.toList")?;
             match v {
-                Value::Set(set) => Ok(Value::List(set.into_iter().collect())),
+                Value::Set(rc) => Ok(Value::List(Rc::new(rc.iter().cloned().collect()))),
                 _ => Err(RuntimeError::new("Set.toList: expected Set")),
             }
         }
         "Set.fromList" => {
             let v = one(args, "Set.fromList")?;
             match v {
-                Value::List(items) => Ok(Value::Set(items.into_iter().collect())),
+                Value::List(items) => Ok(Value::Set(Rc::new(Rc::unwrap_or_clone(items).into_iter().collect()))),
                 _ => Err(RuntimeError::new("Set.fromList: expected List")),
             }
         }
@@ -1483,7 +1507,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.union")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(set_a.union(&set_b).cloned().collect()))
+                    Ok(Value::Set(Rc::new(set_a.union(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.union: expected two Sets")),
             }
@@ -1492,7 +1516,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.intersect")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(set_a.intersection(&set_b).cloned().collect()))
+                    Ok(Value::Set(Rc::new(set_a.intersection(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.intersect: expected two Sets")),
             }
@@ -1501,7 +1525,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.difference")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(set_a.difference(&set_b).cloned().collect()))
+                    Ok(Value::Set(Rc::new(set_a.difference(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.difference: expected two Sets")),
             }
@@ -1608,7 +1632,7 @@ pub fn dispatch(
         "GraphQL.execute" | "GraphQL.query" => {
             Ok(ok(Value::Record(vec![
                 ("data".to_string(), Value::Unit),
-                ("errors".to_string(), Value::List(vec![])),
+                ("errors".to_string(), Value::List(Rc::new(vec![]))),  
             ])))
         }
 
@@ -1629,12 +1653,12 @@ pub fn dispatch(
             let v = one(args, "File.readLines")?;
             match v {
                 Value::Str(path) => match std::fs::read_to_string(&path) {
-                    Ok(contents) => Ok(Value::List(
+                    Ok(contents) => Ok(Value::List(Rc::new(
                         contents
                             .lines()
                             .map(|l| Value::Str(l.to_string()))
                             .collect(),
-                    )),
+                    ))),
                     Err(e) => Err(RuntimeError::new(format!("File.readLines: {}", e))),
                 },
                 _ => Err(RuntimeError::new("File.readLines: expected String path")),
@@ -1673,7 +1697,7 @@ pub fn json_to_value(j: serde_json::Value) -> Value {
         }
         serde_json::Value::String(s) => Value::Str(s),
         serde_json::Value::Array(arr) => {
-            Value::List(arr.into_iter().map(json_to_value).collect())
+            Value::List(Rc::new(arr.into_iter().map(json_to_value).collect()))
         }
         serde_json::Value::Object(map) => {
             Value::Record(map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect())

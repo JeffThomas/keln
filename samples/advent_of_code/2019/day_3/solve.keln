@@ -1,0 +1,79 @@
+-- AoC 2019 Day 3: Crossed Wires
+--
+-- Trace two wires on a grid; find the intersection closest to the origin
+-- by Manhattan distance.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        let wire1 = Maybe.getOr(List.head(lines), "") in
+        let wire2 = Maybe.getOr(List.head(List.drop(lines, 1)), "") in
+        let segs1 = List.map(String.split(wire1, ","), parseSeg) in
+        let segs2 = List.map(String.split(wire2, ","), parseSeg) in
+        let pts1  = List.fold(segs1, { x: 0, y: 0, pts: Set.empty }, traceStep).pts in
+        let init2 = { x: 0, y: 0, minDist: 999999999 } in
+        let searchWalkStep :: Pure { acc: { x: Int, y: Int, dx: Int, dy: Int, minDist: Int }, item: Int } -> { x: Int, y: Int, dx: Int, dy: Int, minDist: Int } =>
+            let { x, y, dx, dy, minDist } = it.acc in
+            let nx     = x + dx in
+            let ny     = y + dy in
+            let hit    = Set.contains(pts1, nx * 100000 + ny) in
+            let d      = Int.abs(nx) + Int.abs(ny) in
+            let newMin = match hit {
+                true  -> Int.min(d, minDist)
+                false -> minDist
+            } in
+            it.acc.with({ x: nx, y: ny, minDist: newMin })
+        in
+        let searchStep :: Pure { acc: { x: Int, y: Int, minDist: Int }, item: { dir: String, dist: Int } } -> { x: Int, y: Int, minDist: Int } =>
+            let { x, y, minDist } = it.acc in
+            let { dir, dist } = it.item in
+            let { dx, dy } = match dir == "R" {
+                true  -> { dx: 1, dy: 0 }
+                false -> match dir == "L" {
+                    true  -> { dx: -1, dy: 0 }
+                    false -> match dir == "U" {
+                        true  -> { dx: 0, dy: 1 }
+                        false -> { dx: 0, dy: -1 }
+                    }
+                }
+            } in
+            let inner = List.fold(List.range(0, dist), { x: x, y: y, dx: dx, dy: dy, minDist: minDist }, searchWalkStep) in
+            it.acc.with({ x: inner.x, y: inner.y, minDist: inner.minDist })
+        in
+        List.fold(segs2, init2, searchStep).minDist
+
+    helpers: {
+        parseSeg :: Pure String -> { dir: String, dist: Int } =>
+            let s = String.trim(it) in
+            { dir: String.slice(s, 0, 1), dist: Result.unwrapOr(Int.parse(String.slice(s, 1, String.length(s))), 0) }
+
+        walkStep :: Pure { acc: { x: Int, y: Int, dx: Int, dy: Int, pts: Set<Int> }, item: Int } -> { x: Int, y: Int, dx: Int, dy: Int, pts: Set<Int> } =>
+            let { x, y, dx, dy, pts } = it.acc in
+            let nx = x + dx in
+            let ny = y + dy in
+            it.acc.with({ x: nx, y: ny, pts: Set.insert(pts, nx * 100000 + ny) })
+
+        traceStep :: Pure { acc: { x: Int, y: Int, pts: Set<Int> }, item: { dir: String, dist: Int } } -> { x: Int, y: Int, pts: Set<Int> } =>
+            let { x, y, pts } = it.acc in
+            let { dir, dist } = it.item in
+            let { dx, dy } = match dir == "R" {
+                true  -> { dx: 1, dy: 0 }
+                false -> match dir == "L" {
+                    true  -> { dx: -1, dy: 0 }
+                    false -> match dir == "U" {
+                        true  -> { dx: 0, dy: 1 }
+                        false -> { dx: 0, dy: -1 }
+                    }
+                }
+            } in
+            let inner = List.fold(List.range(0, dist), { x: x, y: y, dx: dx, dy: dy, pts: pts }, walkStep) in
+            { x: inner.x, y: inner.y, pts: inner.pts }
+    }
+
+    verify: {
+        given("samples/advent_of_code/2019/day_3/input.txt") -> 1195
+    }
+}

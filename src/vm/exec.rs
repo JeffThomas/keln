@@ -1,4 +1,5 @@
 use std::fmt;
+use std::rc::Rc;
 use crate::eval::{stdlib, ChannelInner, RuntimeError, Value, VariantPayload};
 use crate::vm::ir::{BuiltinTable, CallFrame, Constant, Frame, Instruction, KelnModule};
 
@@ -395,7 +396,7 @@ fn exec_step(
                 .iter()
                 .map(|r| frame.clone_reg(*r))
                 .collect::<Result<_, _>>()?;
-            frame.write(*dst, Value::List(vals));
+            frame.write(*dst, Value::List(Rc::new(vals)));
             *ip += 1;
         }
 
@@ -565,12 +566,33 @@ fn exec_step(
         Instruction::MakePartial { dst, fn_reg, bound_reg } => {
             let fn_val = frame.clone_reg(*fn_reg)?;
             let bound_val = frame.clone_reg(*bound_reg)?;
-            let name = fn_ref_name(&fn_val)?;
-            let bound = match bound_val {
-                Value::Record(fields) => fields,
-                other => vec![("_0".to_string(), other)],
+            let result = match fn_val {
+                // Record update: base.with(field: val) or base.with({ ... })
+                Value::Record(mut base_fields) => {
+                    let overrides = match bound_val {
+                        Value::Record(fields) => fields,
+                        other => vec![("_0".to_string(), other)],
+                    };
+                    for (name, val) in overrides {
+                        if let Some(existing) = base_fields.iter_mut().find(|(n, _)| *n == name) {
+                            existing.1 = val;
+                        } else {
+                            base_fields.push((name, val));
+                        }
+                    }
+                    Value::Record(base_fields)
+                }
+                // Function partial application: fn.with(param: val)
+                other => {
+                    let fn_name = fn_ref_name(&other)?;
+                    let bound = match bound_val {
+                        Value::Record(fields) => fields,
+                        other => vec![("_0".to_string(), other)],
+                    };
+                    Value::PartialFn { name: fn_name, bound }
+                }
             };
-            frame.write(*dst, Value::PartialFn { name, bound });
+            frame.write(*dst, result);
             *ip += 1;
         }
 
@@ -674,7 +696,7 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
 
 fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.fold: expected List")),
     };
     let mut acc = init;
@@ -690,19 +712,19 @@ fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) 
 
 fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.map: expected List")),
     };
     let mut result = Vec::with_capacity(items.len());
     for item in items {
         result.push(execute_fn(module, fn_name, item)?);
     }
-    Ok(Value::List(result))
+    Ok(Value::List(Rc::new(result)))
 }
 
 fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name: &str, stop_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let mut acc = init;
@@ -721,7 +743,7 @@ fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name
 
 fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.filter: expected List")),
     };
     let mut result = Vec::new();
@@ -730,7 +752,7 @@ fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<V
             result.push(item);
         }
     }
-    Ok(Value::List(result))
+    Ok(Value::List(Rc::new(result)))
 }
 
 // =============================================================================
@@ -823,7 +845,7 @@ fn exec_fold_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.fold: expected List")),
     };
     let mut acc = init;
@@ -845,7 +867,7 @@ fn exec_map_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.map: expected List")),
     };
     let mut result = Vec::with_capacity(items.len());
@@ -853,7 +875,7 @@ fn exec_map_closure(
         let merged = build_closure_call_arg(item, captures.clone());
         result.push(execute(module, fn_idx, merged)?);
     }
-    Ok(Value::List(result))
+    Ok(Value::List(Rc::new(result)))
 }
 
 fn exec_filter_closure(
@@ -863,7 +885,7 @@ fn exec_filter_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.filter: expected List")),
     };
     let mut result = Vec::new();
@@ -873,7 +895,7 @@ fn exec_filter_closure(
             result.push(item);
         }
     }
-    Ok(Value::List(result))
+    Ok(Value::List(Rc::new(result)))
 }
 
 fn exec_fold_until_closure(
@@ -886,7 +908,7 @@ fn exec_fold_until_closure(
     stop_captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let mut acc = init;
@@ -914,7 +936,7 @@ fn exec_fold_until_mixed(
     stop_captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => v,
+        Value::List(v) => Rc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let mut acc = init;
@@ -944,11 +966,11 @@ fn exec_map_fold_user(
         _ => return Err(ExecError::new("Map.fold: expected Map")),
     };
     let mut acc = init;
-    for (k, v) in entries {
+    for (k, v) in entries.iter() {
         let arg = Value::Record(vec![
             ("acc".to_string(), acc),
-            ("key".to_string(), k),
-            ("value".to_string(), v),
+            ("key".to_string(), k.clone()),
+            ("value".to_string(), v.clone()),
         ]);
         acc = execute_fn(module, fn_name, arg)?;
     }
@@ -968,11 +990,11 @@ fn exec_map_fold_closure(
         _ => return Err(ExecError::new("Map.fold: expected Map")),
     };
     let mut acc = init;
-    for (k, v) in entries {
+    for (k, v) in entries.iter() {
         let step_arg = Value::Record(vec![
             ("acc".to_string(), acc),
-            ("key".to_string(), k),
-            ("value".to_string(), v),
+            ("key".to_string(), k.clone()),
+            ("value".to_string(), v.clone()),
         ]);
         let merged = build_closure_call_arg(step_arg, captures.clone());
         acc = execute(module, fn_idx, merged)?;

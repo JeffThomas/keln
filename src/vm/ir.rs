@@ -335,6 +335,10 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "List.sort", "List.combinations2", "List.foldUntil",
     // Map.fold (170)
     "Map.fold",
+    // List.getOr (171)
+    "List.getOr",
+    // Map.getOr (172)
+    "Map.getOr",
 ];
 
 pub struct BuiltinTable {

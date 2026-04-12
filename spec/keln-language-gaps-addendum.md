@@ -773,3 +773,58 @@ When a `VmClosure` is called with argument `arg`, the VM builds the record `{ it
 **Higher-order builtins with VmClosure:** `List.fold`, `List.map`, `List.filter`, `List.foldUntil`, and `Map.fold` all dispatch through the VM when their function argument is a `VmClosure`, rather than delegating to the tree-walking stdlib. `Map.fold` is also now available in the bytecode backend (`BUILTIN_NAMES[170]`).
 
 **No grammar change.** The `let name :: effects In -> Out => body in rest` syntax is unchanged.
+
+---
+
+## Addendum 6: AI-Author Friction Reduction
+
+### Gap 18: `List.getOr` and Record `.with()` in the Bytecode VM
+
+**Problem:** Two patterns caused disproportionate verbosity in AI-authored Keln programs:
+
+1. **Indexed list access** required `Maybe.getOr(List.head(List.drop(list, i)), default)` — 5 function calls for a single array lookup.
+2. **Record field update** in fold accumulators required retyping every unchanged field: `{ acc: it.acc + 1, w: state.w, h: state.h, board: state.board }` instead of just `it.with(acc: it.acc + 1)`. Record `.with()` was implemented in the tree-walking evaluator (Gap 11) but the bytecode VM's `MakePartial` handler only supported `FnRef` bases, crashing on `Record` bases.
+
+**Resolution:**
+
+**`List.getOr(list, i, default)`** added to stdlib:
+- Returns `list[i]` if `0 <= i < len(list)`, otherwise returns `default`
+- Registered in `is_stdlib`, `dispatch`, and `BUILTIN_NAMES[171]`
+- Replaces the verbose `Maybe.getOr(List.head(List.drop(...)))` idiom everywhere
+
+**Record `.with()` in the bytecode VM** — `MakePartial` in `src/vm/exec.rs` now branches on the base value type:
+- `Value::Record` base → apply overrides in-place (matching field names updated, new names appended) and return a new `Value::Record`
+- `Value::FnRef` / `Value::PartialFn` base → existing partial application behavior unchanged
+
+**Usage:**
+```keln
+-- Indexed access (replaces 5-call chain):
+List.getOr(mem, ip, 0)
+
+-- Record field update in fold steps (both verify and run-bc):
+it.with(ip: it.ip + 4)
+it.with({ ip: it.ip + 4, done: false })
+it.with(ip: 0).with(done: true)
+```
+
+**`Map.getOr(map, key, default)`** added to stdlib:
+- Returns `map[key]` if key exists, otherwise returns `default`
+- Registered in `is_stdlib`, `dispatch`, and `BUILTIN_NAMES[172]`
+- Replaces `Maybe.getOr(Map.get(map, key), default)` — symmetric with `List.getOr`
+
+**`let { f1, f2, f3 } = expr in body` record destructuring** — already implemented in the parser, tree-walker, and VM lowering (no code changes needed). Eliminates the `it.acc.` double indirection in fold helpers:
+```keln
+-- BEFORE: it.acc. everywhere
+it.acc.ip + 4 ... it.acc.mem ... it.acc.done
+
+-- AFTER: destructure at the top of the helper
+let { mem, ip, done } = it.acc in
+ip + 4 ... mem ... done
+```
+The VM lowering emits `FieldGetNamed` for each field in the pattern. Shorthand `{ f }` binds `f`; named `{ field: alias }` binds `alias`.
+
+**Remaining friction (not addressed in this gap):**
+- Fold step type annotation ceremony: `let step :: Pure { acc: T, item: U } -> T =>` still requires explicit types. Type inference for closure signatures would require a full type-checker implementation and is deferred.
+- `foldUntil` boilerplate guard: `match it.acc.done { true -> it.acc, false -> ... }` in each step is unavoidable without a `break`-aware fold primitive. The combination of `.with()` record update, `let`-destructuring, and named capturing helpers reduces the per-step verbosity significantly even without this.
+
+**No grammar change.**

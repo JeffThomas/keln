@@ -1,0 +1,23 @@
+-- AoC 2019 Day 1: The Tyranny of the Rocket Equation
+--
+-- For each module mass, fuel = floor(mass / 3) - 2.
+-- Return the total fuel requirement.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let lines = File.readLines(path) in
+        List.fold(lines, 0, fuelStep)
+
+    helpers: {
+        fuelStep :: Pure { acc: Int, item: String } -> Int =>
+            let mass = Result.unwrapOr(Int.parse(String.trim(it.item)), 0) in
+            it.acc + mass / 3 - 2
+    }
+
+    verify: {
+        given("samples/advent_of_code/2019/day_1/input.txt") -> 3159380
+    }
+}

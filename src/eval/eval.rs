@@ -453,7 +453,7 @@ impl Evaluator {
 
             ast::Expr::List(items, _) => {
                 let vals: Result<Vec<_>, _> = items.iter().map(|e| self.eval_expr(e)).collect();
-                Ok(Value::List(vals?))
+                Ok(Value::List(Rc::new(vals?)))
             }
 
             ast::Expr::DoBlock { stmts, final_expr, .. } => {

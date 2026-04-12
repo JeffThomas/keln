@@ -85,7 +85,7 @@ pub fn json_to_keln_value(j: JValue) -> Value {
         }
         JValue::String(s) => Value::Str(s),
         JValue::Array(arr) => {
-            Value::List(arr.into_iter().map(json_to_keln_value).collect())
+            Value::List(std::rc::Rc::new(arr.into_iter().map(json_to_keln_value).collect()))
         }
         JValue::Object(map) => {
             if let Some(tag) = map.get("$tag") {

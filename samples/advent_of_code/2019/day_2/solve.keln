@@ -1,0 +1,58 @@
+-- AoC 2019 Day 2: 1202 Program Alarm
+--
+-- Run an Intcode program (opcodes 1=add, 2=mul, 99=halt).
+-- Before running, patch mem[1]=12, mem[2]=2.
+-- Return mem[0] after halt.
+
+fn solve {
+    IO String -> Int
+
+    in: path
+    out:
+        let line    = Maybe.getOr(List.head(File.readLines(path)), "") in
+        let nums    = List.map(String.split(line, ","), parseNum) in
+        let n       = List.len(nums) in
+        let loadAcc = List.fold(List.range(0, n), { mem: Map.empty(), nums: nums }, loadMemStep) in
+        let mem1    = Map.insert(Map.insert(loadAcc.mem, 1, 12), 2, 2) in
+        let init    = { mem: mem1, ip: 0, done: false } in
+        let final   = List.foldUntil(List.range(0, 200), init, vmStep, isDone) in
+        Map.getOr(final.mem, 0, 0)
+
+    helpers: {
+        parseNum :: Pure String -> Int =>
+            Result.unwrapOr(Int.parse(String.trim(it)), 0)
+
+        loadMemStep :: Pure { acc: { mem: Map<Int,Int>, nums: List<Int> }, item: Int } -> { mem: Map<Int,Int>, nums: List<Int> } =>
+            let { mem, nums } = it.acc in
+            it.acc.with({ mem: Map.insert(mem, it.item, List.getOr(nums, it.item, 0)) })
+
+        vmStep :: Pure { acc: { mem: Map<Int,Int>, ip: Int, done: Bool }, item: Int } -> { mem: Map<Int,Int>, ip: Int, done: Bool } =>
+            let { mem, ip, done } = it.acc in
+            match done {
+                true  -> it.acc
+                false ->
+                    let op = Map.getOr(mem, ip, 99) in
+                    match op == 99 {
+                        true  -> it.acc.with({ done: true })
+                        false ->
+                            let a1  = Map.getOr(mem, ip + 1, 0) in
+                            let a2  = Map.getOr(mem, ip + 2, 0) in
+                            let a3  = Map.getOr(mem, ip + 3, 0) in
+                            let v1  = Map.getOr(mem, a1, 0) in
+                            let v2  = Map.getOr(mem, a2, 0) in
+                            let res = match op == 1 {
+                                          true  -> v1 + v2
+                                          false -> v1 * v2
+                                      } in
+                            it.acc.with({ mem: Map.insert(mem, a3, res), ip: ip + 4 })
+                    }
+            }
+
+        isDone :: Pure { mem: Map<Int,Int>, ip: Int, done: Bool } -> Bool =>
+            it.done
+    }
+
+    verify: {
+        given("samples/advent_of_code/2019/day_2/input.txt") -> 4330636
+    }
+}

@@ -274,18 +274,18 @@ fn productList {
 
     #[test]
     fn test_sum_list() {
-        let xs = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", xs), Ok(Value::Int(10)));
     }
 
     #[test]
     fn test_sum_list_empty() {
-        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", Value::List(vec![])), Ok(Value::Int(0)));
+        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", Value::List(std::rc::Rc::new(vec![]))), Ok(Value::Int(0)));
     }
 
     #[test]
     fn test_product_list() {
-        let xs = Value::List(vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(eval_fn(LIST_FOLD_SRC, "productList", xs), Ok(Value::Int(24)));
     }
 
@@ -389,20 +389,20 @@ fn firstPositiveOr {
 
     #[test]
     fn test_first_positive_found() {
-        let xs = Value::List(vec![Value::Int(0), Value::Int(0), Value::Int(5)]);
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0), Value::Int(5)]));
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(some(Value::Int(5))));
     }
 
     #[test]
     fn test_first_positive_none() {
-        let xs = Value::List(vec![Value::Int(0), Value::Int(0)]);
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0)]));
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(none()));
     }
 
     #[test]
     fn test_first_positive_or_default() {
         let input = rec(vec![
-            ("xs", Value::List(vec![Value::Int(0)])),
+            ("xs", Value::List(std::rc::Rc::new(vec![Value::Int(0)]))),
             ("default", Value::Int(42)),
         ]);
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositiveOr", input), Ok(Value::Int(42)));
@@ -440,12 +440,12 @@ fn countAll {
     #[test]
     fn test_frequency_counter() {
         let src = MAP_SRC;
-        let items = Value::List(vec![
+        let items = Value::List(std::rc::Rc::new(vec![
             Value::Str("a".into()), Value::Str("b".into()),
             Value::Str("a".into()), Value::Str("c".into()),
             Value::Str("a".into()),
-        ]);
-        let input = rec(vec![("counts", Value::Map(std::collections::BTreeMap::new())), ("items", items)]);
+        ]));
+        let input = rec(vec![("counts", Value::Map(std::rc::Rc::new(std::collections::BTreeMap::new()))), ("items", items)]);
         let result = eval_fn(src, "countAll", input).unwrap();
         if let Value::Map(entries) = &result {
             let get = |k: &str| entries.get(&Value::Str(k.into())).cloned();
@@ -502,12 +502,12 @@ fn appendToClone {
     #[test]
     fn test_clone_list() {
         let input = rec(vec![
-            ("xs", Value::List(vec![Value::Int(1), Value::Int(2)])),
+            ("xs", Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2)]))),
             ("item", Value::Int(3)),
         ]);
         assert_eq!(
             eval_fn(CLONE_SRC, "appendToClone", input),
-            Ok(Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))
+            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])))
         );
     }
 
@@ -546,13 +546,13 @@ fn classifyList {
 
     #[test]
     fn test_classify_list() {
-        let xs = Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(
             eval_fn(MULTI_FN_SRC, "classifyList", xs),
-            Ok(Value::List(vec![
+            Ok(Value::List(std::rc::Rc::new(vec![
                 Value::Str("odd".into()), Value::Str("even".into()),
                 Value::Str("odd".into()), Value::Str("even".into()),
-            ]))
+            ])))
         );
     }
 
@@ -778,7 +778,7 @@ fn sum_with_offset {
     #[test]
     fn test_capturing_helper_basic() {
         let arg = Value::Record(vec![
-            ("items".to_string(), Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            ("items".to_string(), Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))),
             ("offset".to_string(), Value::Int(10)),
         ]);
         assert_eq!(
@@ -806,9 +806,9 @@ fn count_above {
     #[test]
     fn test_capturing_helper_with_match() {
         let arg = Value::Record(vec![
-            ("items".to_string(), Value::List(vec![
+            ("items".to_string(), Value::List(std::rc::Rc::new(vec![
                 Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(2),
-            ])),
+            ]))),
             ("cutoff".to_string(), Value::Int(3)),
         ]);
         assert_eq!(
@@ -957,7 +957,7 @@ fn with_in_fold {
     fn test_record_with_in_fold() {
         let arg = Value::Record(vec![(
             "items".to_string(),
-            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         )]);
         assert_eq!(eval_fn(RECORD_WITH_SRC, "with_in_fold", arg), Ok(Value::Int(6)));
     }

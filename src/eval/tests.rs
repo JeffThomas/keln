@@ -262,11 +262,11 @@ fn doMap { Pure List<Int> -> List<Int>
     out: List.map(xs, double)
 }"#,
             "doMap",
-            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
         assert_eq!(
             result,
-            Ok(Value::List(vec![Value::Int(2), Value::Int(4), Value::Int(6)]))
+            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])))
         );
     }
 
@@ -282,16 +282,16 @@ fn doFilter { Pure List<Int> -> List<Int>
     out: List.filter(xs, isPositive)
 }"#,
             "doFilter",
-            Value::List(vec![
+            Value::List(std::rc::Rc::new(vec![
                 Value::Int(-1),
                 Value::Int(2),
                 Value::Int(-3),
                 Value::Int(4),
-            ]),
+            ])),
         );
         assert_eq!(
             result,
-            Ok(Value::List(vec![Value::Int(2), Value::Int(4)]))
+            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(4)])))
         );
     }
 
@@ -303,7 +303,7 @@ fn doFilter { Pure List<Int> -> List<Int>
     out: List.len(xs)
 }"#,
             "count",
-            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
         assert_eq!(result, Ok(Value::Int(3)));
     }
@@ -632,7 +632,7 @@ fn runAll { IO Unit -> List<Int>
             "runAll",
             Value::Unit,
         );
-        assert_eq!(result, Ok(Value::List(vec![Value::Int(11), Value::Int(12)])));
+        assert_eq!(result, Ok(Value::List(std::rc::Rc::new(vec![Value::Int(11), Value::Int(12)]))));
     }
 
     // =========================================================================
@@ -1058,7 +1058,7 @@ fn addPair { Pure {acc: Int, item: Int} -> Int
             "makeList",
             Value::Unit,
         );
-        assert_eq!(result, Ok(Value::List(vec![Value::Int(0), Value::Int(0), Value::Int(0)])));
+        assert_eq!(result, Ok(Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0), Value::Int(0)]))));
     }
 
     #[test]
