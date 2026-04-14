@@ -701,7 +701,7 @@ impl Evaluator {
                 let merged = match arg {
                     Value::Record(layout, values) => {
                         let field_names = crate::eval::fields_of_layout(layout);
-                        bound.extend(field_names.into_iter().zip(values.into_iter()));
+                        bound.extend(field_names.into_iter().zip(values));
                         Value::make_record_from_pairs(bound)
                     }
                     single => {
@@ -974,18 +974,16 @@ impl Evaluator {
         for fp in fields {
             match fp {
                 ast::FieldPattern::Named(fname, pat) => {
-                    if let Some(pos) = crate::eval::field_pos(layout, fname) {
-                        if let Some(v) = fvals.get(pos) {
+                    if let Some(pos) = crate::eval::field_pos(layout, fname)
+                        && let Some(v) = fvals.get(pos) {
                             self.bind_pattern(pat, v)?;
                         }
-                    }
                 }
                 ast::FieldPattern::Shorthand(fname) => {
-                    if let Some(pos) = crate::eval::field_pos(layout, fname) {
-                        if let Some(v) = fvals.get(pos) {
+                    if let Some(pos) = crate::eval::field_pos(layout, fname)
+                        && let Some(v) = fvals.get(pos) {
                             self.env.bind(fname, v.clone());
                         }
-                    }
                 }
                 ast::FieldPattern::Wildcard => {}
             }

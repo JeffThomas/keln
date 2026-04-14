@@ -594,7 +594,7 @@ fn exec_step(
                     let bound = match bound_val {
                         Value::Record(l, v) => {
                             let names = crate::eval::fields_of_layout(l);
-                            names.into_iter().zip(v.into_iter()).collect()
+                            names.into_iter().zip(v).collect()
                         },
                         other => vec![("_0".to_string(), other)],
                     };

@@ -128,7 +128,7 @@ impl PartialEq for Value {
                     if a.len() != b.len() { return false; }
                     let names_a = fields_of_layout(*la);
                     a.iter().zip(names_a.iter()).all(|(v, name)| {
-                        field_pos(*lb, name).and_then(|pos| b.get(pos)).map_or(false, |bv| bv == v)
+                        field_pos(*lb, name).and_then(|pos| b.get(pos)) == Some(v)
                     })
                 }
             }
@@ -153,7 +153,7 @@ impl PartialEq for VariantPayload {
                     if a.len() != b.len() { return false; }
                     let names_a = fields_of_layout(*la);
                     a.iter().zip(names_a.iter()).all(|(v, name)| {
-                        field_pos(*lb, name).and_then(|pos| b.get(pos)).map_or(false, |bv| bv == v)
+                        field_pos(*lb, name).and_then(|pos| b.get(pos)) == Some(v)
                     })
                 }
             }
