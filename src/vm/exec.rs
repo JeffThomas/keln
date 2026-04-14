@@ -321,19 +321,20 @@ fn exec_step(
                 .layouts
                 .fields_of(*layout_idx)
                 .ok_or_else(|| ExecError::new(format!("MakeRecord: unknown layout {}", layout_idx)))?;
-            let mut record: Vec<(String, Value)> = Vec::with_capacity(field_names.len());
-            for (name, reg) in field_names.iter().zip(fields.iter()) {
-                record.push((name.clone(), frame.clone_reg(*reg)?));
-            }
-            frame.write(*dst, Value::Record(record));
+            let global_idx = crate::eval::intern_layout(field_names);
+            let values: Vec<Value> = fields
+                .iter()
+                .map(|r| frame.clone_reg(*r))
+                .collect::<Result<_, _>>()?;
+            frame.write(*dst, Value::Record(global_idx, values));
             *ip += 1;
         }
 
         Instruction::FieldGet { dst, src, field_idx } => {
             let v = match frame.read(*src)? {
-                Value::Record(fields) => fields
+                Value::Record(_, values) => values
                     .get(*field_idx)
-                    .map(|(_, v)| v.clone())
+                    .cloned()
                     .ok_or_else(|| ExecError::new(format!("FIELD_GET: index {} out of range", field_idx)))?,
                 other => return Err(ExecError::new(format!("FIELD_GET: expected record, got {}", other))),
             };
@@ -347,11 +348,12 @@ fn exec_step(
                 _ => return Err(ExecError::new(format!("FIELD_GET_NAMED: invalid name_idx {}", name_idx))),
             };
             let v = match frame.read(*src)? {
-                Value::Record(fields) => fields
-                    .iter()
-                    .find(|(k, _)| k.as_str() == field_name)
-                    .map(|(_, v)| v.clone())
-                    .ok_or_else(|| ExecError::new(format!("FIELD_GET_NAMED: field '{}' not found", field_name)))?,
+                Value::Record(layout, values) => {
+                    let pos = crate::eval::field_pos(*layout, field_name)
+                        .ok_or_else(|| ExecError::new(format!("FIELD_GET_NAMED: field '{}' not found", field_name)))?;
+                    values.get(pos).cloned()
+                        .ok_or_else(|| ExecError::new(format!("FIELD_GET_NAMED: index {} out of range", pos)))?
+                },
                 other => return Err(ExecError::new(format!("FIELD_GET_NAMED: expected record, got {}", other))),
             };
             frame.write(*dst, v);
@@ -375,7 +377,7 @@ fn exec_step(
             let val = frame.clone_reg(*src)?;
             let payload = match val {
                 Value::Variant { payload: VariantPayload::Tuple(v), .. } => *v,
-                Value::Variant { payload: VariantPayload::Record(f), .. } => Value::Record(f),
+                Value::Variant { payload: VariantPayload::Record(l, v), .. } => Value::Record(l, v),
                 Value::Variant { payload: VariantPayload::Unit, name } =>
                     return Err(ExecError::new(format!("VARIANT_PAYLOAD: '{}' has no payload", name))),
                 other =>
@@ -565,25 +567,35 @@ fn exec_step(
             let bound_val = frame.clone_reg(*bound_reg)?;
             let result = match fn_val {
                 // Record update: base.with(field: val) or base.with({ ... })
-                Value::Record(mut base_fields) => {
-                    let overrides = match bound_val {
-                        Value::Record(fields) => fields,
-                        other => vec![("_0".to_string(), other)],
+                Value::Record(mut base_layout, mut base_values) => {
+                    let (ovr_layout, ovr_values) = match bound_val {
+                        Value::Record(l, v) => (l, v),
+                        other => {
+                            let l = crate::eval::intern_layout(&["_0".to_string()]);
+                            (l, vec![other])
+                        }
                     };
-                    for (name, val) in overrides {
-                        if let Some(existing) = base_fields.iter_mut().find(|(n, _)| *n == name) {
-                            existing.1 = val;
+                    let ovr_names = crate::eval::fields_of_layout(ovr_layout);
+                    let mut base_names = crate::eval::fields_of_layout(base_layout);
+                    for (name, val) in ovr_names.into_iter().zip(ovr_values.into_iter()) {
+                        if let Some(pos) = crate::eval::field_pos(base_layout, &name) {
+                            base_values[pos] = val;
                         } else {
-                            base_fields.push((name, val));
+                            base_names.push(name);
+                            base_values.push(val);
+                            base_layout = crate::eval::intern_layout(&base_names);
                         }
                     }
-                    Value::Record(base_fields)
+                    Value::Record(base_layout, base_values)
                 }
                 // Function partial application: fn.with(param: val)
                 other => {
                     let fn_name = fn_ref_name(&other)?;
                     let bound = match bound_val {
-                        Value::Record(fields) => fields,
+                        Value::Record(l, v) => {
+                            let names = crate::eval::fields_of_layout(l);
+                            names.into_iter().zip(v.into_iter()).collect()
+                        },
                         other => vec![("_0".to_string(), other)],
                     };
                     Value::PartialFn { name: fn_name, bound }
@@ -700,10 +712,7 @@ fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) 
         .ok_or_else(|| ExecError::new(format!("List.fold: unknown fn '{}'", fn_name)))?;
     let mut acc = init;
     for item in items {
-        let arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("item".to_string(), item),
-        ]);
+        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
         acc = execute(module, fn_idx, arg)?;
     }
     Ok(acc)
@@ -734,10 +743,7 @@ fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name
         .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", stop_name)))?;
     let mut acc = init;
     for item in items {
-        let arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("item".to_string(), item),
-        ]);
+        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
         acc = execute(module, step_idx, arg)?;
         if execute(module, stop_idx, acc.clone())? == Value::Bool(true) {
             break;
@@ -841,10 +847,14 @@ fn fn_ref_name(v: &Value) -> Result<String, ExecError> {
 /// Build the merged record `{ it: arg, cap1: v1, cap2: v2, ... }` passed to a
 /// lifted closure function.
 fn build_closure_call_arg(arg: Value, captures: &[(String, Value)]) -> Value {
-    let mut fields = Vec::with_capacity(1 + captures.len());
-    fields.push(("it".to_string(), arg));
-    fields.extend(captures.iter().map(|(k, v)| (k.clone(), v.clone())));
-    Value::Record(fields)
+    let names: Vec<String> = std::iter::once("it".to_string())
+        .chain(captures.iter().map(|(k, _)| k.clone()))
+        .collect();
+    let values: Vec<Value> = std::iter::once(arg)
+        .chain(captures.iter().map(|(_, v)| v.clone()))
+        .collect();
+    let layout = crate::eval::intern_layout(&names);
+    Value::Record(layout, values)
 }
 
 fn exec_fold_closure(
@@ -860,10 +870,7 @@ fn exec_fold_closure(
     };
     let mut acc = init;
     for item in items {
-        let step_arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("item".to_string(), item),
-        ]);
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
         let merged = build_closure_call_arg(step_arg, &captures);
         acc = execute(module, fn_idx, merged)?;
     }
@@ -923,10 +930,7 @@ fn exec_fold_until_closure(
     };
     let mut acc = init;
     for item in items {
-        let step_arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("item".to_string(), item),
-        ]);
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
         let step_merged = build_closure_call_arg(step_arg, &step_captures);
         acc = execute(module, step_idx, step_merged)?;
         let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
@@ -953,10 +957,7 @@ fn exec_fold_until_mixed(
         .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", step_name)))?;
     let mut acc = init;
     for item in items {
-        let arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("item".to_string(), item),
-        ]);
+        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
         acc = execute(module, step_idx, arg)?;
         let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
         if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
@@ -981,11 +982,7 @@ fn exec_map_fold_user(
         .ok_or_else(|| ExecError::new(format!("Map.fold: unknown fn '{}'", fn_name)))?;
     let mut acc = init;
     for (k, v) in entries.iter() {
-        let arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("key".to_string(), k.clone()),
-            ("value".to_string(), v.clone()),
-        ]);
+        let arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
         acc = execute(module, fn_idx, arg)?;
     }
     Ok(acc)
@@ -1005,11 +1002,7 @@ fn exec_map_fold_closure(
     };
     let mut acc = init;
     for (k, v) in entries.iter() {
-        let step_arg = Value::Record(vec![
-            ("acc".to_string(), acc),
-            ("key".to_string(), k.clone()),
-            ("value".to_string(), v.clone()),
-        ]);
+        let step_arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
         let merged = build_closure_call_arg(step_arg, &captures);
         acc = execute(module, fn_idx, merged)?;
     }

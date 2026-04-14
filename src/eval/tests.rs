@@ -79,10 +79,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            Ok(Value::Record(vec![
-                ("x".to_string(), Value::Int(3)),
-                ("y".to_string(), Value::Int(4)),
-            ]))
+            Ok(Value::make_record(&["x", "y"], vec![Value::Int(3), Value::Int(4)]))
         );
     }
 
@@ -94,10 +91,7 @@ mod tests {
     out: p.x
 }"#,
             "getX",
-            Value::Record(vec![
-                ("x".to_string(), Value::Int(7)),
-                ("y".to_string(), Value::Int(2)),
-            ]),
+            Value::make_record(&["x", "y"], vec![Value::Int(7), Value::Int(2)]),
         );
         assert_eq!(result, Ok(Value::Int(7)));
     }

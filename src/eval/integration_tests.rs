@@ -19,7 +19,7 @@ mod integration {
         Value::Variant { name: name.to_string(), payload: VariantPayload::Unit }
     }
     fn rec(fields: Vec<(&str, Value)>) -> Value {
-        Value::Record(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+        Value::make_record_from_pairs(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
     }
 
     // =========================================================================
@@ -777,9 +777,9 @@ fn sum_with_offset {
 
     #[test]
     fn test_capturing_helper_basic() {
-        let arg = Value::Record(vec![
-            ("items".to_string(), Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))),
-            ("offset".to_string(), Value::Int(10)),
+        let arg = Value::make_record(&["items", "offset"], vec![
+            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::Int(10),
         ]);
         assert_eq!(
             eval_fn(CAPTURING_HELPER_SRC, "sum_with_offset", arg),
@@ -805,11 +805,11 @@ fn count_above {
 
     #[test]
     fn test_capturing_helper_with_match() {
-        let arg = Value::Record(vec![
-            ("items".to_string(), Value::List(std::rc::Rc::new(vec![
+        let arg = Value::make_record(&["items", "cutoff"], vec![
+            Value::List(std::rc::Rc::new(vec![
                 Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(2),
-            ]))),
-            ("cutoff".to_string(), Value::Int(3)),
+            ])),
+            Value::Int(3),
         ]);
         assert_eq!(
             eval_fn(NESTED_CLOSURE_SRC, "count_above", arg),
@@ -869,10 +869,7 @@ fn make_frac {
 
     #[test]
     fn test_type_alias_field_access() {
-        let arg = Value::Record(vec![
-            ("n".to_string(), Value::Int(3)),
-            ("d".to_string(), Value::Int(4)),
-        ]);
+        let arg = Value::make_record(&["n", "d"], vec![Value::Int(3), Value::Int(4)]);
         assert_eq!(eval_fn(TYPE_ALIAS_SRC, "make_frac", arg), Ok(Value::Int(7)));
     }
 
@@ -936,29 +933,21 @@ fn with_in_fold {
 
     #[test]
     fn test_record_with_single_field() {
-        let arg = Value::Record(vec![
-            ("count".to_string(), Value::Int(5)),
-            ("label".to_string(), Value::Str("x".to_string())),
-        ]);
+        let arg = Value::make_record(&["count", "label"], vec![Value::Int(5), Value::Str("x".to_string())]);
         assert_eq!(eval_fn(RECORD_WITH_SRC, "update_count", arg), Ok(Value::Int(6)));
     }
 
     #[test]
     fn test_record_with_multi_field() {
-        let arg = Value::Record(vec![
-            ("x".to_string(), Value::Int(1)),
-            ("y".to_string(), Value::Int(2)),
-            ("z".to_string(), Value::Int(3)),
-        ]);
+        let arg = Value::make_record(&["x", "y", "z"], vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
         assert_eq!(eval_fn(RECORD_WITH_SRC, "update_multi", arg), Ok(Value::Int(33)));
     }
 
     #[test]
     fn test_record_with_in_fold() {
-        let arg = Value::Record(vec![(
-            "items".to_string(),
+        let arg = Value::make_record(&["items"], vec![
             Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
-        )]);
+        ]);
         assert_eq!(eval_fn(RECORD_WITH_SRC, "with_in_fold", arg), Ok(Value::Int(6)));
     }
 

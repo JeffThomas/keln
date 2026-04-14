@@ -192,7 +192,8 @@ impl VerifyExecutor {
     ) -> Result<Value, RuntimeError> {
         match expr {
             ast::Expr::Record { name, fields, .. } => {
-                let mut fvs: Vec<(String, Value)> = Vec::new();
+                let mut names: Vec<String> = Vec::with_capacity(fields.len());
+                let mut vals: Vec<Value> = Vec::with_capacity(fields.len());
                 for fv in fields {
                     let v = if matches!(fv.value.as_ref(), ast::Expr::Wildcard(_))
                         && active_fn_mocks.contains(&fv.name)
@@ -201,20 +202,22 @@ impl VerifyExecutor {
                     } else {
                         self.evaluator.eval_expr(&fv.value)?
                     };
-                    fvs.push((fv.name.clone(), v));
+                    names.push(fv.name.clone());
+                    vals.push(v);
                 }
+                let layout = crate::eval::intern_layout(&names);
                 match name {
                     Some(name_expr) => {
                         if let ast::Expr::UpperVar(type_name, _) = name_expr.as_ref() {
                             Ok(Value::Variant {
                                 name: type_name.clone(),
-                                payload: VariantPayload::Record(fvs),
+                                payload: VariantPayload::Record(layout, vals),
                             })
                         } else {
-                            Ok(Value::Record(fvs))
+                            Ok(Value::Record(layout, vals))
                         }
                     }
-                    None => Ok(Value::Record(fvs)),
+                    None => Ok(Value::Record(layout, vals)),
                 }
             }
             other => self.evaluator.eval_expr(other),

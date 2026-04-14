@@ -9,7 +9,7 @@ mod tests;
 mod integration_tests;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
@@ -53,8 +53,8 @@ pub enum Value {
     Bytes(Vec<u8>),
     Unit,
     List(Rc<Vec<Value>>),
-    /// Product type or anonymous record: ordered field list
-    Record(Vec<(String, Value)>),
+    /// Product type or anonymous record: layout index into global interner + positional values
+    Record(u32, Vec<Value>),
     /// Sum type variant: Ok(5), None, Running { attempt: 1 }
     Variant { name: String, payload: VariantPayload },
     /// First-class reference to a named function
@@ -87,7 +87,24 @@ pub enum Value {
 pub enum VariantPayload {
     Unit,
     Tuple(Box<Value>),
-    Record(Vec<(String, Value)>),
+    Record(u32, Vec<Value>),
+}
+
+impl Value {
+    /// Construct a record from parallel field names and values.
+    pub fn make_record(names: &[&str], values: Vec<Value>) -> Value {
+        let owned: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        let layout = intern_layout(&owned);
+        Value::Record(layout, values)
+    }
+
+    /// Construct a record from owned (name, value) pairs.
+    pub fn make_record_from_pairs(pairs: Vec<(String, Value)>) -> Value {
+        let names: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+        let values: Vec<Value> = pairs.into_iter().map(|(_, v)| v).collect();
+        let layout = intern_layout(&names);
+        Value::Record(layout, values)
+    }
 }
 
 impl PartialEq for Value {
@@ -104,9 +121,16 @@ impl PartialEq for Value {
             (Value::Map(a), Value::Map(b)) => a == b,
             (Value::Set(a), Value::Set(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
-            (Value::Record(a), Value::Record(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
+            (Value::Record(la, a), Value::Record(lb, b)) => {
+                if la == lb {
+                    a == b
+                } else {
+                    if a.len() != b.len() { return false; }
+                    let names_a = fields_of_layout(*la);
+                    a.iter().zip(names_a.iter()).all(|(v, name)| {
+                        field_pos(*lb, name).and_then(|pos| b.get(pos)).map_or(false, |bv| bv == v)
+                    })
+                }
             }
             (
                 Value::Variant { name: n1, payload: p1 },
@@ -122,9 +146,16 @@ impl PartialEq for VariantPayload {
         match (self, other) {
             (VariantPayload::Unit, VariantPayload::Unit) => true,
             (VariantPayload::Tuple(a), VariantPayload::Tuple(b)) => a == b,
-            (VariantPayload::Record(a), VariantPayload::Record(b)) => {
-                a.len() == b.len()
-                    && a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
+            (VariantPayload::Record(la, a), VariantPayload::Record(lb, b)) => {
+                if la == lb {
+                    a == b
+                } else {
+                    if a.len() != b.len() { return false; }
+                    let names_a = fields_of_layout(*la);
+                    a.iter().zip(names_a.iter()).all(|(v, name)| {
+                        field_pos(*lb, name).and_then(|pos| b.get(pos)).map_or(false, |bv| bv == v)
+                    })
+                }
             }
             _ => false,
         }
@@ -154,7 +185,7 @@ impl Ord for Value {
                 Value::Duration(_) => 6,
                 Value::Timestamp(_) => 7,
                 Value::List(_) => 8,
-                Value::Record(_) => 9,
+                Value::Record(_, _) => 9,
                 Value::Variant { .. } => 10,
                 Value::Map(_) => 11,
                 Value::Set(_) => 12,
@@ -179,11 +210,15 @@ impl Ord for Value {
             (Value::Duration(a), Value::Duration(b)) => a.cmp(b),
             (Value::Timestamp(a), Value::Timestamp(b)) => a.cmp(b),
             (Value::List(a), Value::List(b)) => a.cmp(b),
-            (Value::Record(a), Value::Record(b)) => {
-                let mut a = a.clone(); a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                let mut b = b.clone(); b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                a.len().cmp(&b.len()).then_with(|| {
-                    a.iter().zip(b.iter())
+            (Value::Record(la, a), Value::Record(lb, b)) => {
+                let names_a = fields_of_layout(*la);
+                let names_b = fields_of_layout(*lb);
+                let mut pairs_a: Vec<(&str, &Value)> = names_a.iter().map(String::as_str).zip(a.iter()).collect();
+                let mut pairs_b: Vec<(&str, &Value)> = names_b.iter().map(String::as_str).zip(b.iter()).collect();
+                pairs_a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_a.len().cmp(&pairs_b.len()).then_with(|| {
+                    pairs_a.iter().zip(pairs_b.iter())
                         .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
                         .find(|o| *o != Ordering::Equal)
                         .unwrap_or(Ordering::Equal)
@@ -222,11 +257,15 @@ impl Ord for VariantPayload {
             (VariantPayload::Tuple(a), VariantPayload::Tuple(b)) => a.cmp(b),
             (VariantPayload::Tuple(_), _) => Ordering::Less,
             (_, VariantPayload::Tuple(_)) => Ordering::Greater,
-            (VariantPayload::Record(a), VariantPayload::Record(b)) => {
-                let mut a = a.clone(); a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                let mut b = b.clone(); b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                a.len().cmp(&b.len()).then_with(|| {
-                    a.iter().zip(b.iter())
+            (VariantPayload::Record(la, a), VariantPayload::Record(lb, b)) => {
+                let names_a = fields_of_layout(*la);
+                let names_b = fields_of_layout(*lb);
+                let mut pairs_a: Vec<(&str, &Value)> = names_a.iter().map(String::as_str).zip(a.iter()).collect();
+                let mut pairs_b: Vec<(&str, &Value)> = names_b.iter().map(String::as_str).zip(b.iter()).collect();
+                pairs_a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_a.len().cmp(&pairs_b.len()).then_with(|| {
+                    pairs_a.iter().zip(pairs_b.iter())
                         .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
                         .find(|o| *o != Ordering::Equal)
                         .unwrap_or(Ordering::Equal)
@@ -255,12 +294,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, "]")
             }
-            Value::Record(fields) => {
+            Value::Record(layout, values) => {
                 write!(f, "{{ ")?;
-                for (i, (k, v)) in fields.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
+                let names = fields_of_layout(*layout);
+                for (i, (k, v)) in names.iter().zip(values.iter()).enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
                     write!(f, "{}: {}", k, v)?;
                 }
                 write!(f, " }}")
@@ -268,12 +306,11 @@ impl fmt::Display for Value {
             Value::Variant { name, payload } => match payload {
                 VariantPayload::Unit => write!(f, "{}", name),
                 VariantPayload::Tuple(v) => write!(f, "{}({})", name, v),
-                VariantPayload::Record(fields) => {
+                VariantPayload::Record(layout, values) => {
                     write!(f, "{} {{ ", name)?;
-                    for (i, (k, v)) in fields.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
+                    let names = fields_of_layout(*layout);
+                    for (i, (k, v)) in names.iter().zip(values.iter()).enumerate() {
+                        if i > 0 { write!(f, ", ")?; }
                         write!(f, "{}: {}", k, v)?;
                     }
                     write!(f, " }}")
@@ -364,4 +401,58 @@ pub fn load_source(source: &str) -> Result<Evaluator, String> {
 pub fn eval_fn(source: &str, fn_name: &str, arg: Value) -> Result<Value, String> {
     let mut ev = load_source(source)?;
     ev.call_fn(fn_name, arg).map_err(|e| format!("{}", e))
+}
+
+// =============================================================================
+// Record layout interner — global canonical table for field-name → index mapping
+// =============================================================================
+
+struct RecordInterner {
+    by_idx: Vec<Vec<String>>,
+    by_fields: HashMap<Vec<String>, u32>,
+}
+
+impl RecordInterner {
+    fn new() -> Self {
+        RecordInterner { by_idx: Vec::new(), by_fields: HashMap::new() }
+    }
+
+    fn intern(&mut self, fields: &[String]) -> u32 {
+        if let Some(&idx) = self.by_fields.get(fields) {
+            return idx;
+        }
+        let owned = fields.to_vec();
+        let idx = self.by_idx.len() as u32;
+        self.by_fields.insert(owned.clone(), idx);
+        self.by_idx.push(owned);
+        idx
+    }
+
+    fn fields_of(&self, idx: u32) -> Option<&[String]> {
+        self.by_idx.get(idx as usize).map(|v| v.as_slice())
+    }
+
+    fn field_pos(&self, idx: u32, name: &str) -> Option<usize> {
+        self.by_idx.get(idx as usize)?.iter().position(|f| f == name)
+    }
+}
+
+thread_local! {
+    static RECORD_INTERNER: RefCell<RecordInterner> = RefCell::new(RecordInterner::new());
+}
+
+/// Register a list of field names in canonical order, returning a stable layout index.
+/// The same field names in the same order always return the same index (thread-local).
+pub fn intern_layout(fields: &[String]) -> u32 {
+    RECORD_INTERNER.with(|r| r.borrow_mut().intern(fields))
+}
+
+/// Look up field names for a layout index. Returns an empty vec for unknown indices.
+pub fn fields_of_layout(idx: u32) -> Vec<String> {
+    RECORD_INTERNER.with(|r| r.borrow().fields_of(idx).unwrap_or(&[]).to_vec())
+}
+
+/// Find the positional index of a named field within a layout. Returns None if not found.
+pub fn field_pos(layout_idx: u32, name: &str) -> Option<usize> {
+    RECORD_INTERNER.with(|r| r.borrow().field_pos(layout_idx, name))
 }

@@ -20,10 +20,11 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
         Value::List(items) => {
             JValue::Array(items.iter().map(keln_value_to_json).collect())
         }
-        Value::Record(fields) => {
+        Value::Record(layout, values) => {
+            let field_names = crate::eval::fields_of_layout(*layout);
             let mut map = serde_json::Map::new();
-            for (k, v) in fields {
-                map.insert(k.clone(), keln_value_to_json(v));
+            for (k, v) in field_names.into_iter().zip(values.iter()) {
+                map.insert(k, keln_value_to_json(v));
             }
             JValue::Object(map)
         }
@@ -34,11 +35,12 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
             VariantPayload::Tuple(inner) => {
                 json!({ "$tag": name, "$value": keln_value_to_json(inner) })
             }
-            VariantPayload::Record(fields) => {
+            VariantPayload::Record(layout, values) => {
+                let field_names = crate::eval::fields_of_layout(*layout);
                 let mut map = serde_json::Map::new();
                 map.insert("$tag".to_string(), json!(name));
-                for (k, v) in fields {
-                    map.insert(k.clone(), keln_value_to_json(v));
+                for (k, v) in field_names.into_iter().zip(values.iter()) {
+                    map.insert(k, keln_value_to_json(v));
                 }
                 JValue::Object(map)
             }
@@ -103,24 +105,29 @@ pub fn json_to_keln_value(j: JValue) -> Value {
                 }
 
                 // Collect remaining fields as Record payload (skip "$tag")
-                let fields: Vec<(String, Value)> = map
-                    .into_iter()
-                    .filter(|(k, _)| k != "$tag")
-                    .map(|(k, v)| (k, json_to_keln_value(v)))
-                    .collect();
+                let mut names: Vec<String> = Vec::new();
+                let mut vals: Vec<Value> = Vec::new();
+                for (k, v) in map.into_iter().filter(|(k, _)| k != "$tag") {
+                    names.push(k);
+                    vals.push(json_to_keln_value(v));
+                }
 
-                if fields.is_empty() {
+                if names.is_empty() {
                     Value::Variant { name, payload: VariantPayload::Unit }
                 } else {
-                    Value::Variant { name, payload: VariantPayload::Record(fields) }
+                    let layout = crate::eval::intern_layout(&names);
+                    Value::Variant { name, payload: VariantPayload::Record(layout, vals) }
                 }
             } else {
                 // Plain object → Record
-                let fields: Vec<(String, Value)> = map
-                    .into_iter()
-                    .map(|(k, v)| (k, json_to_keln_value(v)))
-                    .collect();
-                Value::Record(fields)
+                let mut names: Vec<String> = Vec::with_capacity(map.len());
+                let mut vals: Vec<Value> = Vec::with_capacity(map.len());
+                for (k, v) in map {
+                    names.push(k);
+                    vals.push(json_to_keln_value(v));
+                }
+                let layout = crate::eval::intern_layout(&names);
+                Value::Record(layout, vals)
             }
         }
     }

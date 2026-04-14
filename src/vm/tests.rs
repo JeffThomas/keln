@@ -797,9 +797,9 @@ fn offset_fold {
     reason: "closure captures offset from outer scope"
 }
 "#;
-    let arg = Value::Record(vec![
-        ("list".to_string(), Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))),
-        ("offset".to_string(), Value::Int(10)),
+    let arg = Value::make_record(&["list", "offset"], vec![
+        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::Int(10),
     ]);
     assert_both_backends(src, "offset_fold", arg, Value::Int(36));
 }
@@ -834,9 +834,9 @@ fn multiply_all {
     reason: "closure captures factor for map"
 }
 "#;
-    let arg = Value::Record(vec![
-        ("list".to_string(), Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))),
-        ("factor".to_string(), Value::Int(5)),
+    let arg = Value::make_record(&["list", "factor"], vec![
+        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::Int(5),
     ]);
     assert_both_backends(src, "multiply_all", arg,
         Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)])));
@@ -855,11 +855,11 @@ fn filter_above {
     reason: "closure captures min_val for filter predicate"
 }
 "#;
-    let arg = Value::Record(vec![
-        ("list".to_string(), Value::List(std::rc::Rc::new(vec![
+    let arg = Value::make_record(&["list", "min_val"], vec![
+        Value::List(std::rc::Rc::new(vec![
             Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(7), Value::Int(2),
-        ]))),
-        ("min_val".to_string(), Value::Int(3)),
+        ])),
+        Value::Int(3),
     ]);
     assert_both_backends(src, "filter_above", arg,
         Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(7)])));
@@ -881,10 +881,10 @@ fn weighted_sum {
 }
 "#;
     // step: 0+(1*2+5)=7 → 7+(2*2+5)=16 → 16+(3*2+5)=27
-    let arg = Value::Record(vec![
-        ("list".to_string(), Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)]))),
-        ("base".to_string(), Value::Int(5)),
-        ("weight".to_string(), Value::Int(2)),
+    let arg = Value::make_record(&["list", "base", "weight"], vec![
+        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::Int(5),
+        Value::Int(2),
     ]);
     assert_both_backends(src, "weighted_sum", arg, Value::Int(27));
 }

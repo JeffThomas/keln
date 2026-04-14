@@ -413,10 +413,11 @@ impl Evaluator {
             }
 
             ast::Expr::Record { name, fields, .. } => {
-                let mut fvs: Vec<(String, Value)> = Vec::new();
+                let mut names: Vec<String> = Vec::with_capacity(fields.len());
+                let mut vals: Vec<Value> = Vec::with_capacity(fields.len());
                 for fv in fields {
-                    let v = self.eval_expr(&fv.value)?;
-                    fvs.push((fv.name.clone(), v));
+                    names.push(fv.name.clone());
+                    vals.push(self.eval_expr(&fv.value)?);
                 }
                 let variant_name: Option<String> = match name {
                     Some(name_expr) => match name_expr.as_ref() {
@@ -430,24 +431,25 @@ impl Evaluator {
                 {
                     for fdecl in &fdecls {
                         if let Some(rc) = &fdecl.refinement
-                            && let Some((_, val)) = fvs.iter().find(|(n, _)| n == &fdecl.name)
+                            && let Some(pos) = names.iter().position(|n| n == &fdecl.name)
                         {
-                            check_refinement(val, rc, &fdecl.name, &fdecl.span)?;
+                            check_refinement(&vals[pos], rc, &fdecl.name, &fdecl.span)?;
                         }
                     }
                 }
+                let layout = crate::eval::intern_layout(&names);
                 match name {
                     Some(name_expr) => {
                         if let ast::Expr::UpperVar(type_name, _) = name_expr.as_ref() {
                             Ok(Value::Variant {
                                 name: type_name.clone(),
-                                payload: VariantPayload::Record(fvs),
+                                payload: VariantPayload::Record(layout, vals),
                             })
                         } else {
-                            Ok(Value::Record(fvs))
+                            Ok(Value::Record(layout, vals))
                         }
                     }
-                    None => Ok(Value::Record(fvs)),
+                    None => Ok(Value::Record(layout, vals)),
                 }
             }
 
@@ -584,16 +586,18 @@ impl Evaluator {
                     }
                 };
                 match fn_val {
-                    Value::Record(mut fields) => {
-                        // Record update: override existing fields or append new ones
+                    Value::Record(mut layout, mut values) => {
+                        let mut field_names = crate::eval::fields_of_layout(layout);
                         for (name, val) in overrides {
-                            if let Some(f) = fields.iter_mut().find(|(n, _)| *n == name) {
-                                f.1 = val;
+                            if let Some(pos) = crate::eval::field_pos(layout, &name) {
+                                values[pos] = val;
                             } else {
-                                fields.push((name, val));
+                                field_names.push(name);
+                                values.push(val);
+                                layout = crate::eval::intern_layout(&field_names);
                             }
                         }
-                        Ok(Value::Record(fields))
+                        Ok(Value::Record(layout, values))
                     }
                     Value::FnRef(name) => {
                         Ok(Value::PartialFn { name, bound: overrides })
@@ -694,18 +698,18 @@ impl Evaluator {
                 }
             }
             Value::PartialFn { name, mut bound } => {
-                // Merge the bound fields with the new arg
                 let merged = match arg {
-                    Value::Record(new_fields) => {
-                        bound.extend(new_fields);
-                        Value::Record(bound)
+                    Value::Record(layout, values) => {
+                        let field_names = crate::eval::fields_of_layout(layout);
+                        bound.extend(field_names.into_iter().zip(values.into_iter()));
+                        Value::make_record_from_pairs(bound)
                     }
                     single => {
                         if bound.is_empty() {
                             single
                         } else {
                             bound.push(("_input".to_string(), single));
-                            Value::Record(bound)
+                            Value::make_record_from_pairs(bound)
                         }
                     }
                 };
@@ -871,19 +875,19 @@ impl Evaluator {
                 }
             }
             ast::Pattern::RecordVariant { name, fields, .. } => {
-                if let Value::Variant { name: n, payload: VariantPayload::Record(fvals) } = val {
-                    n == name && self.field_patterns_match(fields, fvals)
+                if let Value::Variant { name: n, payload: VariantPayload::Record(layout, fvals) } = val {
+                    n == name && self.field_patterns_match(fields, *layout, fvals)
                 } else {
                     false
                 }
             }
             ast::Pattern::Record { fields, .. } => {
-                let fvals = match val {
-                    Value::Record(fvals) => fvals,
-                    Value::Variant { payload: VariantPayload::Record(fvals), .. } => fvals,
+                let (layout, fvals) = match val {
+                    Value::Record(l, v) => (l, v.as_slice()),
+                    Value::Variant { payload: VariantPayload::Record(l, v), .. } => (l, v.as_slice()),
                     _ => return false,
                 };
-                self.field_patterns_match(fields, fvals)
+                self.field_patterns_match(fields, *layout, fvals)
             }
             ast::Pattern::List(pats, _) => {
                 if let Value::List(items) = val {
@@ -896,14 +900,15 @@ impl Evaluator {
         }
     }
 
-    fn field_patterns_match(&self, fields: &[ast::FieldPattern], fvals: &[(String, Value)]) -> bool {
+    fn field_patterns_match(&self, fields: &[ast::FieldPattern], layout: u32, fvals: &[Value]) -> bool {
         fields.iter().all(|fp| match fp {
-            ast::FieldPattern::Named(fname, pat) => fvals
-                .iter()
-                .find(|(n, _)| n == fname)
-                .map(|(_, v)| self.pattern_matches(pat, v))
-                .unwrap_or(false),
-            ast::FieldPattern::Shorthand(fname) => fvals.iter().any(|(n, _)| n == fname),
+            ast::FieldPattern::Named(fname, pat) => {
+                crate::eval::field_pos(layout, fname)
+                    .and_then(|pos| fvals.get(pos))
+                    .map(|v| self.pattern_matches(pat, v))
+                    .unwrap_or(false)
+            },
+            ast::FieldPattern::Shorthand(fname) => crate::eval::field_pos(layout, fname).is_some(),
             ast::FieldPattern::Wildcard => true,
         })
     }
@@ -934,20 +939,20 @@ impl Evaluator {
                 Ok(())
             }
             ast::Pattern::RecordVariant { name, fields, .. } => {
-                if let Value::Variant { name: n, payload: VariantPayload::Record(fvals) } = val
+                if let Value::Variant { name: n, payload: VariantPayload::Record(layout, fvals) } = val
                     && n == name
                 {
-                    self.bind_field_patterns(fields, fvals)?;
+                    self.bind_field_patterns(fields, *layout, fvals)?;
                 }
                 Ok(())
             }
             ast::Pattern::Record { fields, .. } => {
-                let fvals = match val {
-                    Value::Record(fvals) => fvals,
-                    Value::Variant { payload: VariantPayload::Record(fvals), .. } => fvals,
+                let (layout, fvals) = match val {
+                    Value::Record(l, v) => (l, v.as_slice()),
+                    Value::Variant { payload: VariantPayload::Record(l, v), .. } => (l, v.as_slice()),
                     _ => return Ok(()),
                 };
-                self.bind_field_patterns(fields, fvals)
+                self.bind_field_patterns(fields, *layout, fvals)
             }
             ast::Pattern::List(pats, _) => {
                 if let Value::List(items) = val {
@@ -963,18 +968,23 @@ impl Evaluator {
     fn bind_field_patterns(
         &mut self,
         fields: &[ast::FieldPattern],
-        fvals: &[(String, Value)],
+        layout: u32,
+        fvals: &[Value],
     ) -> Result<(), RuntimeError> {
         for fp in fields {
             match fp {
                 ast::FieldPattern::Named(fname, pat) => {
-                    if let Some((_, v)) = fvals.iter().find(|(n, _)| n == fname) {
-                        self.bind_pattern(pat, v)?;
+                    if let Some(pos) = crate::eval::field_pos(layout, fname) {
+                        if let Some(v) = fvals.get(pos) {
+                            self.bind_pattern(pat, v)?;
+                        }
                     }
                 }
                 ast::FieldPattern::Shorthand(fname) => {
-                    if let Some((_, v)) = fvals.iter().find(|(n, _)| n == fname) {
-                        self.env.bind(fname, v.clone());
+                    if let Some(pos) = crate::eval::field_pos(layout, fname) {
+                        if let Some(v) = fvals.get(pos) {
+                            self.env.bind(fname, v.clone());
+                        }
                     }
                 }
                 ast::FieldPattern::Wildcard => {}
@@ -998,12 +1008,12 @@ pub(crate) fn pack_args(mut vals: Vec<Value>) -> Value {
     match vals.len() {
         0 => Value::Unit,
         1 => vals.remove(0),
-        _ => Value::Record(
-            vals.into_iter()
-                .enumerate()
-                .map(|(i, v)| (format!("_{}", i), v))
-                .collect(),
-        ),
+        _ => {
+            let n = vals.len();
+            let field_names: Vec<String> = (0..n).map(|i| format!("_{}", i)).collect();
+            let layout = crate::eval::intern_layout(&field_names);
+            Value::Record(layout, vals)
+        }
     }
 }
 
@@ -1083,20 +1093,16 @@ fn eval_field_access(
     span: &ast::Span,
 ) -> Result<Value, RuntimeError> {
     match &obj {
-        Value::Record(fields) => fields
-            .iter()
-            .find(|(n, _)| n == field)
-            .map(|(_, v)| v.clone())
-            .ok_or_else(|| {
-                RuntimeError::at(format!("field '{}' not found in record", field), span)
-            }),
-        Value::Variant { payload: VariantPayload::Record(fields), .. } => fields
-            .iter()
-            .find(|(n, _)| n == field)
-            .map(|(_, v)| v.clone())
-            .ok_or_else(|| {
-                RuntimeError::at(format!("field '{}' not found in variant record", field), span)
-            }),
+        Value::Record(layout, values) => {
+            let pos = crate::eval::field_pos(*layout, field)
+                .ok_or_else(|| RuntimeError::at(format!("field '{}' not found in record", field), span))?;
+            Ok(values[pos].clone())
+        },
+        Value::Variant { payload: VariantPayload::Record(layout, values), .. } => {
+            let pos = crate::eval::field_pos(*layout, field)
+                .ok_or_else(|| RuntimeError::at(format!("field '{}' not found in variant record", field), span))?;
+            Ok(values[pos].clone())
+        },
         _ => Err(RuntimeError::at(
             format!("field access '{}' on non-record: {}", field, obj),
             span,

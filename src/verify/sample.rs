@@ -229,17 +229,18 @@ fn sample_generic(name: &str, args: &[TypeExpr]) -> Vec<Value> {
 // =========================================================================
 
 fn sample_product(fields: &[ast::FieldTypeDecl]) -> Vec<Value> {
-    let fvs: Vec<(String, Value)> = fields
+    let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+    let vals: Vec<Value> = fields
         .iter()
         .map(|f| {
-            let v = sample_for_type(&f.type_expr, f.refinement.as_ref())
+            sample_for_type(&f.type_expr, f.refinement.as_ref())
                 .into_iter()
                 .next()
-                .unwrap_or(Value::Unit);
-            (f.name.clone(), v)
+                .unwrap_or(Value::Unit)
         })
         .collect();
-    vec![Value::Record(fvs)]
+    let layout = crate::eval::intern_layout(&names);
+    vec![Value::Record(layout, vals)]
 }
 
 // =============================================================================

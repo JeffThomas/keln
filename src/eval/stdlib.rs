@@ -391,10 +391,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     let mut acc = init;
                     for item in Rc::unwrap_or_clone(items) {
-                        let arg = Value::Record(vec![
-                            ("acc".to_string(), acc),
-                            ("item".to_string(), item),
-                        ]);
+                        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), arg, &sp())?;
                     }
                     Ok(acc)
@@ -410,10 +407,7 @@ pub fn dispatch(
                     items.reverse();
                     let mut acc = init;
                     for item in items {
-                        let arg = Value::Record(vec![
-                            ("acc".to_string(), acc),
-                            ("item".to_string(), item),
-                        ]);
+                        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), arg, &sp())?;
                     }
                     Ok(acc)
@@ -555,10 +549,7 @@ pub fn dispatch(
                     a.iter()
                         .zip(b.iter())
                         .map(|(x, y)| {
-                            Value::Record(vec![
-                                ("fst".to_string(), x.clone()),
-                                ("snd".to_string(), y.clone()),
-                            ])
+                            Value::make_record(&["fst", "snd"], vec![x.clone(), y.clone()])
                         })
                         .collect(),
                 ))),
@@ -598,10 +589,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     let mut acc = init;
                     for item in Rc::unwrap_or_clone(items) {
-                        let record = Value::Record(vec![
-                            ("acc".to_string(), acc),
-                            ("item".to_string(), item),
-                        ]);
+                        let record = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                     }
                     Ok(acc)
@@ -622,10 +610,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     let mut acc = init;
                     for item in Rc::unwrap_or_clone(items) {
-                        let record = Value::Record(vec![
-                            ("acc".to_string(), acc),
-                            ("item".to_string(), item),
-                        ]);
+                        let record = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                         if ev.call_value(pred.clone(), acc.clone(), &sp())? == Value::Bool(true) {
                             break;
@@ -681,13 +666,16 @@ pub fn dispatch(
                         for j in (i + 1)..n {
                             // Fields must be in alphabetical order to match
                             // how the parser/evaluator builds records.
-                            let rec = vec![
-                                ("fst".to_string(), items[i].clone()),
-                                ("i".to_string(),   Value::Int(i as i64)),
-                                ("j".to_string(),   Value::Int(j as i64)),
-                                ("snd".to_string(), items[j].clone()),
-                            ];
-                            result.push(Value::Record(rec));
+                            let rec = Value::make_record(
+                                &["fst", "i", "j", "snd"],
+                                vec![
+                                    items[i].clone(),
+                                    Value::Int(i as i64),
+                                    Value::Int(j as i64),
+                                    items[j].clone(),
+                                ],
+                            );
+                            result.push(rec);
                         }
                     }
                     Ok(Value::List(Rc::new(result)))
@@ -706,10 +694,10 @@ pub fn dispatch(
                     Ok(n) => Ok(ok(Value::Int(n))),
                     Err(_) => Ok(err(Value::Variant {
                         name: "NotANumber".to_string(),
-                        payload: VariantPayload::Record(vec![(
-                            "input".to_string(),
-                            Value::Str(s),
-                        )]),
+                        payload: VariantPayload::Record(
+                            crate::eval::intern_layout(&["input".to_string()]),
+                            vec![Value::Str(s)],
+                        ),
                     })),
                 },
                 _ => Err(RuntimeError::new("Int.parse: expected String")),
@@ -1043,7 +1031,7 @@ pub fn dispatch(
             let v = one(args, "Task.spawn")?;
             let result = match &v {
                 Value::FnRef(name) => ev.call_fn(name, Value::Unit)?,
-                Value::PartialFn { name, bound } => ev.call_fn(name, Value::Record(bound.clone()))?,
+                Value::PartialFn { name, bound } => ev.call_fn(name, Value::make_record_from_pairs(bound.clone()))?,
                 _ => v.clone(),
             };
             Ok(Value::Task(Box::new(result)))
@@ -1390,7 +1378,7 @@ pub fn dispatch(
             match v {
                 Value::Map(rc) => Ok(Value::List(Rc::new(
                     rc.iter().map(|(k, v)| {
-                        Value::Record(vec![("key".to_string(), k.clone()), ("value".to_string(), v.clone())])
+                        Value::make_record(&["key", "value"], vec![k.clone(), v.clone()])
                     }).collect()
                 ))),
                 _ => Err(RuntimeError::new("Map.toList: expected Map")),
@@ -1403,11 +1391,7 @@ pub fn dispatch(
                 Value::Map(entries) => {
                     let mut acc = init;
                     for (k, v) in entries.iter() {
-                        let record = Value::Record(vec![
-                            ("acc".to_string(), acc),
-                            ("key".to_string(), k.clone()),
-                            ("value".to_string(), v.clone()),
-                        ]);
+                        let record = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                     }
                     Ok(acc)
@@ -1423,9 +1407,9 @@ pub fn dispatch(
                     let mut map = std::collections::BTreeMap::new();
                     for item in Rc::unwrap_or_clone(items) {
                         match item {
-                            Value::Record(mut fields) if fields.len() >= 2 => {
-                                let (_, key) = fields.remove(0);
-                                let (_, val) = fields.remove(0);
+                            Value::Record(_, mut values) if values.len() >= 2 => {
+                                let key = values.remove(0);
+                                let val = values.remove(0);
                                 map.insert(key, val);
                             }
                             _ => return Err(RuntimeError::new("Map.fromList: each item must be {key, value}")),
@@ -1551,9 +1535,10 @@ pub fn dispatch(
                     Ok(val) => Ok(ok(Value::Str(val))),
                     Err(_) => Ok(err(Value::Variant {
                         name: "Missing".to_string(),
-                        payload: VariantPayload::Record(vec![
-                            ("key".to_string(), Value::Str(key)),
-                        ]),
+                        payload: VariantPayload::Record(
+                            crate::eval::intern_layout(&["key".to_string()]),
+                            vec![Value::Str(key)],
+                        ),
                     })),
                 },
                 _ => Err(RuntimeError::new("Env.require: expected String key")),
@@ -1575,9 +1560,10 @@ pub fn dispatch(
                 Ok(j) => Ok(ok(json_to_value(j))),
                 Err(e) => Ok(err(Value::Variant {
                     name: "InvalidJson".to_string(),
-                    payload: VariantPayload::Record(vec![
-                        ("offset".to_string(), Value::Int(e.column() as i64)),
-                    ]),
+                    payload: VariantPayload::Record(
+                        crate::eval::intern_layout(&["offset".to_string()]),
+                        vec![Value::Int(e.column() as i64)],
+                    ),
                 })),
             }
         }
@@ -1608,10 +1594,7 @@ pub fn dispatch(
                 _ => 200,
             };
             let body_bytes = serde_json::to_vec(&value_to_json(&body)).unwrap_or_default();
-            Ok(Value::Record(vec![
-                ("status".to_string(), Value::Int(status_int)),
-                ("body".to_string(), Value::Bytes(body_bytes)),
-            ]))
+            Ok(Value::make_record(&["status", "body"], vec![Value::Int(status_int), Value::Bytes(body_bytes)]))
         }
         "Response.err" => {
             let (status, e) = two(args, "Response.err")?;
@@ -1620,20 +1603,14 @@ pub fn dispatch(
                 _ => 500,
             };
             let body_bytes = serde_json::to_vec(&value_to_json(&e)).unwrap_or_default();
-            Ok(Value::Record(vec![
-                ("status".to_string(), Value::Int(status_int)),
-                ("body".to_string(), Value::Bytes(body_bytes)),
-            ]))
+            Ok(Value::make_record(&["status", "body"], vec![Value::Int(status_int), Value::Bytes(body_bytes)]))
         }
 
         // =====================================================================
         // GraphQL (trusted stub)
         // =====================================================================
         "GraphQL.execute" | "GraphQL.query" => {
-            Ok(ok(Value::Record(vec![
-                ("data".to_string(), Value::Unit),
-                ("errors".to_string(), Value::List(Rc::new(vec![]))),  
-            ])))
+            Ok(ok(Value::make_record(&["data", "errors"], vec![Value::Unit, Value::List(Rc::new(vec![]))])))
         }
 
         // =====================================================================
@@ -1674,10 +1651,7 @@ pub fn dispatch(
 // =========================================================================
 
 fn stub_response(status: i64) -> Value {
-    Value::Record(vec![
-        ("status".to_string(), Value::Int(status)),
-        ("body".to_string(), Value::Bytes(b"{}".to_vec())),
-    ])
+    Value::make_record(&["status", "body"], vec![Value::Int(status), Value::Bytes(b"{}".to_vec())])
 }
 
 // =========================================================================
@@ -1700,7 +1674,14 @@ pub fn json_to_value(j: serde_json::Value) -> Value {
             Value::List(Rc::new(arr.into_iter().map(json_to_value).collect()))
         }
         serde_json::Value::Object(map) => {
-            Value::Record(map.into_iter().map(|(k, v)| (k, json_to_value(v))).collect())
+            let mut names: Vec<String> = Vec::with_capacity(map.len());
+            let mut vals: Vec<Value> = Vec::with_capacity(map.len());
+            for (k, v) in map {
+                names.push(k);
+                vals.push(json_to_value(v));
+            }
+            let layout = crate::eval::intern_layout(&names);
+            Value::Record(layout, vals)
         }
     }
 }
@@ -1718,9 +1699,10 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::List(items) => {
             serde_json::Value::Array(items.iter().map(value_to_json).collect())
         }
-        Value::Record(fields) => {
+        Value::Record(layout, values) => {
+            let field_names = crate::eval::fields_of_layout(*layout);
             let obj: serde_json::Map<String, serde_json::Value> =
-                fields.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
+                field_names.into_iter().zip(values.iter()).map(|(k, v)| (k, value_to_json(v))).collect();
             serde_json::Value::Object(obj)
         }
         Value::Map(map) => {
@@ -1744,9 +1726,10 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
                 VariantPayload::Tuple(inner) => {
                     obj.insert("value".to_string(), value_to_json(inner));
                 }
-                VariantPayload::Record(fields) => {
-                    for (k, v) in fields {
-                        obj.insert(k.clone(), value_to_json(v));
+                VariantPayload::Record(layout, values) => {
+                    let field_names = crate::eval::fields_of_layout(*layout);
+                    for (k, v) in field_names.into_iter().zip(values.iter()) {
+                        obj.insert(k, value_to_json(v));
                     }
                 }
             }
@@ -1775,9 +1758,9 @@ fn two(mut args: Vec<Value>, fn_name: &str) -> Result<(Value, Value), RuntimeErr
         Ok((a, b))
     } else if args.len() == 1 {
         match args.remove(0) {
-            Value::Record(mut fields) if fields.len() >= 2 => {
-                let (_, a) = fields.remove(0);
-                let (_, b) = fields.remove(0);
+            Value::Record(_, mut values) if values.len() >= 2 => {
+                let a = values.remove(0);
+                let b = values.remove(0);
                 Ok((a, b))
             }
             other => Err(RuntimeError::new(format!(
@@ -1798,10 +1781,10 @@ fn three(mut args: Vec<Value>, fn_name: &str) -> Result<(Value, Value, Value), R
         Ok((a, b, c))
     } else if args.len() == 1 {
         match args.remove(0) {
-            Value::Record(mut fields) if fields.len() >= 3 => {
-                let (_, a) = fields.remove(0);
-                let (_, b) = fields.remove(0);
-                let (_, c) = fields.remove(0);
+            Value::Record(_, mut values) if values.len() >= 3 => {
+                let a = values.remove(0);
+                let b = values.remove(0);
+                let c = values.remove(0);
                 Ok((a, b, c))
             }
             _ => Err(RuntimeError::new(format!("{}: expected 3 arguments", fn_name))),
