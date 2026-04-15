@@ -687,6 +687,10 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
                 && module.fn_idx(step_name.as_str()).is_some() {
                 return exec_fold_until_mixed(module, list.clone(), init.clone(), step_name, *pi, pc.clone());
             }
+            if let [list, init, Value::VmClosure { fn_idx: si, captures: sc }, Value::FnRef(stop_name)] = &args[..]
+                && module.fn_idx(stop_name.as_str()).is_some() {
+                return exec_fold_until_mixed_rev(module, list.clone(), init.clone(), *si, sc.clone(), stop_name);
+            }
             dispatch_builtin(name, args)
         }
         "Map.fold" => {
@@ -961,6 +965,32 @@ fn exec_fold_until_mixed(
         acc = execute(module, step_idx, arg)?;
         let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
         if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+fn exec_fold_until_mixed_rev(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    step_idx: usize,
+    step_captures: Vec<(String, Value)>,
+    stop_name: &str,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Rc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.foldUntil: expected List")),
+    };
+    let stop_idx = module.fn_idx(stop_name)
+        .ok_or_else(|| ExecError::new(format!("List.foldUntil: unknown fn '{}'", stop_name)))?;
+    let mut acc = init;
+    for item in items {
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        let step_merged = build_closure_call_arg(step_arg, &step_captures);
+        acc = execute(module, step_idx, step_merged)?;
+        if execute(module, stop_idx, acc.clone())? == Value::Bool(true) {
             break;
         }
     }
