@@ -54,6 +54,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.sort"
             | "List.combinations2"
             | "List.foldUntil"
+            | "List.findMap"
             | "Int.parse"
             | "Int.toString"
             | "Int.abs"
@@ -144,6 +145,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "Map.values"
             | "Map.toList"
             | "Map.fold"
+            | "Map.foldUntil"
             | "Map.fromList"
             | "Map.size"
             | "Map.merge"
@@ -515,6 +517,21 @@ pub fn dispatch(
                     Ok(none())
                 }
                 _ => Err(RuntimeError::new("List.find: expected List")),
+            }
+        }
+        "List.findMap" => {
+            let (list, f) = two(args, "List.findMap")?;
+            match list {
+                Value::List(items) => {
+                    for item in Rc::unwrap_or_clone(items) {
+                        let result = ev.call_value(f.clone(), item, &sp())?;
+                        if is_variant(&result, "Some") {
+                            return Ok(result);
+                        }
+                    }
+                    Ok(none())
+                }
+                _ => Err(RuntimeError::new("List.findMap: expected List")),
             }
         }
         "List.contains" => {
@@ -1397,6 +1414,29 @@ pub fn dispatch(
                     Ok(acc)
                 }
                 _ => Err(RuntimeError::new("Map.fold: expected Map")),
+            }
+        }
+        "Map.foldUntil" => {
+            // Map.foldUntil(map, init, stepFn, stopFn)
+            // stepFn receives { acc, key, value }; stops when stopFn(acc) returns true.
+            let mut iter = args.into_iter();
+            let map  = iter.next().ok_or_else(|| RuntimeError::new("Map.foldUntil: missing map"))?;
+            let init = iter.next().ok_or_else(|| RuntimeError::new("Map.foldUntil: missing init"))?;
+            let f    = iter.next().ok_or_else(|| RuntimeError::new("Map.foldUntil: missing stepFn"))?;
+            let pred = iter.next().ok_or_else(|| RuntimeError::new("Map.foldUntil: missing stopFn"))?;
+            match map {
+                Value::Map(entries) => {
+                    let mut acc = init;
+                    for (k, v) in entries.iter() {
+                        let record = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+                        acc = ev.call_value(f.clone(), record, &sp())?;
+                        if ev.call_value(pred.clone(), acc.clone(), &sp())? == Value::Bool(true) {
+                            break;
+                        }
+                    }
+                    Ok(acc)
+                }
+                _ => Err(RuntimeError::new("Map.foldUntil: expected Map")),
             }
         }
         "Map.fromList" => {

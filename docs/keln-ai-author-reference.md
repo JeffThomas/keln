@@ -247,6 +247,9 @@ let sum = List.fold(nums, 0, addPair)
 -- Find: first match or None
 let first = List.find(nums, isPositive)
 
+-- FindMap: first successful transformation or None
+let parsed = List.findMap(strs, tryParse)
+
 -- Pipeline (idiomatic for chains):
 let result = nums
     |> List.filter(isPositive)
@@ -379,6 +382,7 @@ List.flatten      { Pure List<List<T>>                   -> List<T>             
 List.sort         { Pure List<T> where T: Ord            -> List<T>              }
 List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:Int,snd:T}> }
 List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U,Bool> -> U | E }
+List.findMap      { List<T>, FunctionRef<E,T,Maybe<U>>           -> Maybe<U>         | E }
 ```
 
 **`List.getOr(list, i, default)`** — safe indexed access; returns `list[i]` or `default` if out of bounds. Replaces `Maybe.getOr(List.head(List.drop(list, i)), default)`.
@@ -390,6 +394,11 @@ List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U
 **`List.sort` ordering for records:** records sort by field name alphabetically, then by value. A record `{ dist: Int, i: Int, j: Int }` sorts by `dist` first (d < i < j). Use this to sort-by-key without a comparator function.
 
 **`List.combinations2`** returns all unordered pairs from a list as `{fst: T, i: Int, j: Int, snd: T}` records, where `i < j` are the original indices. The pairs are generated natively in Rust — use this instead of a nested fold when you need all pairs (see performance pitfall below).
+
+**`List.findMap(list, fn)`** — applies `fn` to each element; returns the first `Some(v)` result, or `None` if every call returns `None`. Prefer over a manual `foldUntil` with a `Maybe` accumulator when searching for the first successful transformation. Classic use case: searching through candidate lengths or options in a nested decomposition:
+```keln
+let result = List.findMap(List.range(2, 12), tryLength)
+```
 
 **`List.foldUntil(list, init, stepFn, stopFn)`** — like `List.fold` but stops early when `stopFn(acc)` returns `true`. The step function receives `{acc: U, item: T}` (same as `List.fold`). Use this when you need to terminate a fold before processing the entire list (e.g. Kruskal's algorithm stopping at a single component).
 
@@ -406,6 +415,7 @@ Map.values      { Pure Map<K,V>                                     -> List<V>  
 Map.toList      { Pure Map<K,V>                                     -> List<{key:K,value:V}>}
 Map.fromList    { Pure List<{key:K,value:V}>                        -> Map<K,V>             }
 Map.fold        { Map<K,V>, A, FunctionRef<E,{acc:A,key:K,value:V},A> -> A     | E         }
+Map.foldUntil   { Map<K,V>, A, FunctionRef<E,{acc:A,key:K,value:V},A>, FunctionRef<E,A,Bool> -> A | E }
 Map.size        { Pure Map<K,V>                                     -> Int                  }
 Map.merge       { Pure Map<K,V>, Map<K,V>                           -> Map<K,V>             }
 ```
@@ -419,6 +429,8 @@ produce a proper empty map. `Map.fromList([])` remains a valid alternative.
 **`Map.getOr(map, key, default)`** — returns `map[key]` or `default` if absent. Replaces `Maybe.getOr(Map.get(map, key), default)`.
 
 **`Map.fold(map, init, fn)`** — like `List.fold` but iterates over key-value pairs. The callback receives `{ acc: A, key: K, value: V }` directly (no `.item` nesting). Prefer this over `Map.toList` + `List.fold` when you only need to reduce the map.
+
+**`Map.foldUntil(map, init, stepFn, stopFn)`** — like `Map.fold` but stops early when `stopFn(acc)` returns `true`. Same callback shape as `Map.fold` (`{ acc, key, value }`). All four FnRef/VmClosure combos for step and stop are supported.
 
 ### Set
 ```keln

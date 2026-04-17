@@ -890,6 +890,140 @@ fn weighted_sum {
 }
 
 // =============================================================================
+// List.findMap — both backends
+// =============================================================================
+
+#[test]
+fn test_find_map_fnref_finds_first() {
+    let src = r#"
+fn doubleFirstEven {
+    Pure List<Int> -> Maybe<Int>
+    in: xs
+    out: List.findMap(xs, tryDouble)
+    helpers: {
+        tryDouble :: Pure Int -> Maybe<Int> =>
+            match it % 2 == 0 {
+                true  -> Some(it * 2)
+                false -> None
+            }
+    }
+}
+"#;
+    let xs = Value::List(std::rc::Rc::new(vec![
+        Value::Int(1), Value::Int(3), Value::Int(4), Value::Int(6),
+    ]));
+    let expected = Value::Variant {
+        name: "Some".to_string(),
+        payload: crate::eval::VariantPayload::Tuple(Box::new(Value::Int(8))),
+    };
+    assert_both_backends(src, "doubleFirstEven", xs, expected);
+}
+
+#[test]
+fn test_find_map_fnref_returns_none() {
+    let src = r#"
+fn doubleFirstEven {
+    Pure List<Int> -> Maybe<Int>
+    in: xs
+    out: List.findMap(xs, tryDouble)
+    helpers: {
+        tryDouble :: Pure Int -> Maybe<Int> =>
+            match it % 2 == 0 {
+                true  -> Some(it * 2)
+                false -> None
+            }
+    }
+}
+"#;
+    let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
+    let expected = Value::Variant {
+        name: "None".to_string(),
+        payload: crate::eval::VariantPayload::Unit,
+    };
+    assert_both_backends(src, "doubleFirstEven", xs, expected);
+}
+
+#[test]
+fn test_find_map_closure_captures_context() {
+    let src = r#"
+fn findAbove {
+    Pure { xs: List<Int>, limit: Int } -> Maybe<Int>
+    in: args
+    out:
+        let lim = args.limit in
+        let tryAbove :: Pure Int -> Maybe<Int> =>
+            match it > lim {
+                true  -> Some(it)
+                false -> None
+            }
+        in
+        List.findMap(args.xs, tryAbove)
+}
+"#;
+    let input = Value::make_record(&["limit", "xs"], vec![
+        Value::Int(10),
+        Value::List(std::rc::Rc::new(vec![
+            Value::Int(1), Value::Int(5), Value::Int(12), Value::Int(20),
+        ])),
+    ]);
+    let expected = Value::Variant {
+        name: "Some".to_string(),
+        payload: crate::eval::VariantPayload::Tuple(Box::new(Value::Int(12))),
+    };
+    assert_both_backends(src, "findAbove", input, expected);
+}
+
+// =============================================================================
+// Map.foldUntil — both backends
+// =============================================================================
+
+#[test]
+fn test_map_fold_until_stops_early() {
+    let src = r#"
+fn sumUntil {
+    Pure Map<String, Int> -> Int
+    in: m
+    out: Map.foldUntil(m, 0, addVal, isDone)
+    helpers: {
+        addVal :: Pure { acc: Int, key: String, value: Int } -> Int =>
+            it.acc + it.value
+        isDone :: Pure Int -> Bool =>
+            it > 10
+    }
+}
+"#;
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(Value::Str("a".into()), Value::Int(3));
+    map.insert(Value::Str("b".into()), Value::Int(5));
+    map.insert(Value::Str("c".into()), Value::Int(7));
+    map.insert(Value::Str("d".into()), Value::Int(9));
+    // BTreeMap iterates alphabetically: a=3 (acc=3), b=5 (acc=8), c=7 (acc=15 > 10 → stop)
+    assert_both_backends(src, "sumUntil", Value::Map(std::rc::Rc::new(map)), Value::Int(15));
+}
+
+#[test]
+fn test_map_fold_until_full_traverse() {
+    let src = r#"
+fn sumAll {
+    Pure Map<String, Int> -> Int
+    in: m
+    out: Map.foldUntil(m, 0, addVal, neverStop)
+    helpers: {
+        addVal :: Pure { acc: Int, key: String, value: Int } -> Int =>
+            it.acc + it.value
+        neverStop :: Pure Int -> Bool =>
+            false
+    }
+}
+"#;
+    let mut map = std::collections::BTreeMap::new();
+    map.insert(Value::Str("x".into()), Value::Int(10));
+    map.insert(Value::Str("y".into()), Value::Int(20));
+    map.insert(Value::Str("z".into()), Value::Int(30));
+    assert_both_backends(src, "sumAll", Value::Map(std::rc::Rc::new(map)), Value::Int(60));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 

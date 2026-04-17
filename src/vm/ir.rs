@@ -339,6 +339,10 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "List.getOr",
     // Map.getOr (172)
     "Map.getOr",
+    // List.findMap (173)
+    "List.findMap",
+    // Map.foldUntil (174)
+    "Map.foldUntil",
 ];
 
 pub struct BuiltinTable {

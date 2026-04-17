@@ -703,6 +703,35 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             dispatch_builtin(name, args)
         }
+        "Map.foldUntil" => {
+            if let [map, init, Value::FnRef(step_name), Value::FnRef(stop_name)] = &args[..]
+                && module.fn_idx(step_name.as_str()).is_some()
+                && module.fn_idx(stop_name.as_str()).is_some() {
+                return exec_map_fold_until_user(module, map.clone(), init.clone(), step_name, stop_name);
+            }
+            if let [map, init, Value::VmClosure { fn_idx: si, captures: sc }, Value::VmClosure { fn_idx: pi, captures: pc }] = &args[..] {
+                return exec_map_fold_until_closure(module, map.clone(), init.clone(), *si, sc.clone(), *pi, pc.clone());
+            }
+            if let [map, init, Value::FnRef(step_name), Value::VmClosure { fn_idx: pi, captures: pc }] = &args[..]
+                && module.fn_idx(step_name.as_str()).is_some() {
+                return exec_map_fold_until_mixed(module, map.clone(), init.clone(), step_name, *pi, pc.clone());
+            }
+            if let [map, init, Value::VmClosure { fn_idx: si, captures: sc }, Value::FnRef(stop_name)] = &args[..]
+                && module.fn_idx(stop_name.as_str()).is_some() {
+                return exec_map_fold_until_mixed_rev(module, map.clone(), init.clone(), *si, sc.clone(), stop_name);
+            }
+            dispatch_builtin(name, args)
+        }
+        "List.findMap" => {
+            if let [list, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_find_map_user(module, list.clone(), fn_name);
+            }
+            if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_find_map_closure(module, list.clone(), *fn_idx, captures.clone());
+            }
+            dispatch_builtin(name, args)
+        }
         _ => dispatch_builtin(name, args),
     }
 }
@@ -1014,6 +1043,150 @@ fn exec_map_fold_user(
     for (k, v) in entries.iter() {
         let arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
         acc = execute(module, fn_idx, arg)?;
+    }
+    Ok(acc)
+}
+
+fn exec_find_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Rc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.findMap: expected List")),
+    };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("List.findMap: unknown fn '{}'", fn_name)))?;
+    for item in items {
+        let result = execute(module, fn_idx, item)?;
+        if matches!(&result, Value::Variant { name, .. } if name == "Some") {
+            return Ok(result);
+        }
+    }
+    Ok(Value::Variant { name: "None".to_string(), payload: crate::eval::VariantPayload::Unit })
+}
+
+fn exec_find_map_closure(
+    module: &KelnModule,
+    list: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Rc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.findMap: expected List")),
+    };
+    for item in items {
+        let merged = build_closure_call_arg(item, &captures);
+        let result = execute(module, fn_idx, merged)?;
+        if matches!(&result, Value::Variant { name, .. } if name == "Some") {
+            return Ok(result);
+        }
+    }
+    Ok(Value::Variant { name: "None".to_string(), payload: crate::eval::VariantPayload::Unit })
+}
+
+#[allow(clippy::mutable_key_type)]
+fn exec_map_fold_until_user(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    step_name: &str,
+    stop_name: &str,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.foldUntil: expected Map")),
+    };
+    let step_idx = module.fn_idx(step_name)
+        .ok_or_else(|| ExecError::new(format!("Map.foldUntil: unknown fn '{}'", step_name)))?;
+    let stop_idx = module.fn_idx(stop_name)
+        .ok_or_else(|| ExecError::new(format!("Map.foldUntil: unknown fn '{}'", stop_name)))?;
+    let mut acc = init;
+    for (k, v) in entries.iter() {
+        let arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+        acc = execute(module, step_idx, arg)?;
+        if execute(module, stop_idx, acc.clone())? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+#[allow(clippy::mutable_key_type)]
+fn exec_map_fold_until_closure(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    step_idx: usize,
+    step_captures: Vec<(String, Value)>,
+    stop_idx: usize,
+    stop_captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.foldUntil: expected Map")),
+    };
+    let mut acc = init;
+    for (k, v) in entries.iter() {
+        let step_arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+        let step_merged = build_closure_call_arg(step_arg, &step_captures);
+        acc = execute(module, step_idx, step_merged)?;
+        let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
+        if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+#[allow(clippy::mutable_key_type)]
+fn exec_map_fold_until_mixed(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    step_name: &str,
+    stop_idx: usize,
+    stop_captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.foldUntil: expected Map")),
+    };
+    let step_idx = module.fn_idx(step_name)
+        .ok_or_else(|| ExecError::new(format!("Map.foldUntil: unknown fn '{}'", step_name)))?;
+    let mut acc = init;
+    for (k, v) in entries.iter() {
+        let arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+        acc = execute(module, step_idx, arg)?;
+        let stop_merged = build_closure_call_arg(acc.clone(), &stop_captures);
+        if execute(module, stop_idx, stop_merged)? == Value::Bool(true) {
+            break;
+        }
+    }
+    Ok(acc)
+}
+
+#[allow(clippy::mutable_key_type)]
+fn exec_map_fold_until_mixed_rev(
+    module: &KelnModule,
+    map: Value,
+    init: Value,
+    step_idx: usize,
+    step_captures: Vec<(String, Value)>,
+    stop_name: &str,
+) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.foldUntil: expected Map")),
+    };
+    let stop_idx = module.fn_idx(stop_name)
+        .ok_or_else(|| ExecError::new(format!("Map.foldUntil: unknown fn '{}'", stop_name)))?;
+    let mut acc = init;
+    for (k, v) in entries.iter() {
+        let step_arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+        let step_merged = build_closure_call_arg(step_arg, &step_captures);
+        acc = execute(module, step_idx, step_merged)?;
+        if execute(module, stop_idx, acc.clone())? == Value::Bool(true) {
+            break;
+        }
     }
     Ok(acc)
 }

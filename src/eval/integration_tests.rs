@@ -952,6 +952,135 @@ fn with_in_fold {
     }
 
     // =========================================================================
+    // List.findMap — first successful transformation or None
+    // =========================================================================
+
+    const FIND_MAP_SRC: &str = r#"
+fn doubleFirstEven {
+    Pure List<Int> -> Maybe<Int>
+    in: xs
+    out: List.findMap(xs, tryDouble)
+    helpers: {
+        tryDouble :: Pure Int -> Maybe<Int> =>
+            match it % 2 == 0 {
+                true  -> Some(it * 2)
+                false -> None
+            }
+    }
+}
+
+fn findAboveLimit {
+    Pure { xs: List<Int>, limit: Int } -> Maybe<Int>
+    in: args
+    out:
+        let lim = args.limit in
+        let tryAbove :: Pure Int -> Maybe<Int> =>
+            match it > lim {
+                true  -> Some(it)
+                false -> None
+            }
+        in
+        List.findMap(args.xs, tryAbove)
+}
+"#;
+
+    #[test]
+    fn test_find_map_finds_first() {
+        let xs = Value::List(std::rc::Rc::new(vec![
+            Value::Int(1), Value::Int(3), Value::Int(4), Value::Int(6),
+        ]));
+        assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(some(Value::Int(8))));
+    }
+
+    #[test]
+    fn test_find_map_returns_none() {
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
+        assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(none()));
+    }
+
+    #[test]
+    fn test_find_map_empty_list() {
+        let xs = Value::List(std::rc::Rc::new(vec![]));
+        assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(none()));
+    }
+
+    #[test]
+    fn test_find_map_closure_captures_context() {
+        let input = Value::make_record(&["limit", "xs"], vec![
+            Value::Int(10),
+            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(5), Value::Int(12), Value::Int(20)])),
+        ]);
+        assert_eq!(eval_fn(FIND_MAP_SRC, "findAboveLimit", input), Ok(some(Value::Int(12))));
+    }
+
+    // =========================================================================
+    // Map.foldUntil — early-exit map fold
+    // =========================================================================
+
+    const MAP_FOLD_UNTIL_SRC: &str = r#"
+fn sumMapUntil {
+    Pure { m: Map<String, Int>, limit: Int } -> Int
+    in: args
+    out: Map.foldUntil(args.m, 0, addVal, isDone)
+    helpers: {
+        addVal :: Pure { acc: Int, key: String, value: Int } -> Int =>
+            it.acc + it.value
+        isDone :: Pure Int -> Bool =>
+            it > args.limit
+    }
+}
+
+fn sumMapFull {
+    Pure Map<String, Int> -> Int
+    in: m
+    out: Map.foldUntil(m, 0, addVal, neverStop)
+    helpers: {
+        addVal :: Pure { acc: Int, key: String, value: Int } -> Int =>
+            it.acc + it.value
+        neverStop :: Pure Int -> Bool =>
+            false
+    }
+}
+"#;
+
+    #[test]
+    fn test_map_fold_until_stops_early() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(Value::Str("a".into()), Value::Int(3));
+        map.insert(Value::Str("b".into()), Value::Int(5));
+        map.insert(Value::Str("c".into()), Value::Int(7));
+        map.insert(Value::Str("d".into()), Value::Int(9));
+        let input = Value::make_record(&["m", "limit"], vec![
+            Value::Map(std::rc::Rc::new(map)),
+            Value::Int(10),
+        ]);
+        // a=3, b=5 → 8 (continue), c=7 → 15 > 10 (stop)
+        assert_eq!(eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapUntil", input), Ok(Value::Int(15)));
+    }
+
+    #[test]
+    fn test_map_fold_until_full_when_stop_never_fires() {
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(Value::Str("a".into()), Value::Int(3));
+        map.insert(Value::Str("b".into()), Value::Int(5));
+        map.insert(Value::Str("c".into()), Value::Int(7));
+        assert_eq!(
+            eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapFull", Value::Map(std::rc::Rc::new(map))),
+            Ok(Value::Int(15))
+        );
+    }
+
+    #[test]
+    fn test_map_fold_until_empty_map() {
+        let map = std::collections::BTreeMap::new();
+        let input = Value::make_record(&["m", "limit"], vec![
+            Value::Map(std::rc::Rc::new(map)),
+            Value::Int(0),
+        ]);
+        assert_eq!(eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapUntil", input), Ok(Value::Int(0)));
+    }
+
+    // =========================================================================
     // Regression 3: Lexer InputString truncation at 1024 characters.
     // Before the fix, lexxor::InputString silently truncated source to 1024
     // chars. Programs longer than that would fail to parse or lose definitions.
