@@ -64,6 +64,9 @@ struct FnCtx {
     debug_names: Vec<Option<String>>,
     /// Names bound to Closeable<Channel<T>> values — used to select ChanRecvMaybe.
     closeable_bindings: HashSet<String>,
+    /// Set when lowering a `let rec` closure body: (bare_name, fn_idx, capture_names).
+    /// Used by lower_call to emit direct self-calls instead of failing lookups.
+    rec_fn: Option<(String, usize, Vec<String>)>,
 }
 
 impl FnCtx {
@@ -78,6 +81,7 @@ impl FnCtx {
             next_label: 0,
             debug_names: vec![Some("input".to_string())],
             closeable_bindings: HashSet::new(),
+            rec_fn: None,
         }
     }
 
@@ -629,8 +633,8 @@ impl Lowerer {
                 Ok(val_reg)
             }
 
-            Expr::ClosureExpr { name, body, rest, .. } => {
-                self.lower_closure_expr(ctx, name, body, rest, tail)
+            Expr::ClosureExpr { name, body, rest, recursive, .. } => {
+                self.lower_closure_expr(ctx, name, body, rest, *recursive, tail)
             }
 
             Expr::LetIn { binding, body, .. } => {
@@ -823,6 +827,33 @@ impl Lowerer {
                 let arg_regs = self.lower_args(ctx, args)?;
                 let arg_reg = self.pack_args(ctx, arg_regs)?;
 
+                // let rec self-call: pack {it: arg, cap1: c1, ...} and call fn_idx directly.
+                let rec_call = ctx.rec_fn.as_ref().and_then(|(rn, ri, rc)| {
+                    if name == rn { Some((*ri, rc.clone())) } else { None }
+                });
+                if let Some((rec_fn_idx, cap_names)) = rec_call {
+                    let mut field_names = vec!["it".to_string()];
+                    let mut field_regs = vec![arg_reg];
+                    for cap_name in &cap_names {
+                        let r = ctx.lookup_var(cap_name).ok_or_else(|| {
+                            LowerError::new(format!("rec capture '{}' not in scope", cap_name))
+                        })?;
+                        field_names.push(cap_name.clone());
+                        field_regs.push(r);
+                    }
+                    let layout_idx = self.module.layouts.register_anon(field_names);
+                    let packed = ctx.alloc_reg();
+                    ctx.emit(Instruction::MakeRecord { dst: packed, layout_idx, fields: field_regs });
+                    return if tail {
+                        ctx.emit(Instruction::TailCall { fn_idx: rec_fn_idx, arg_reg: packed });
+                        Ok(NO_REG)
+                    } else {
+                        let dst = ctx.alloc_reg();
+                        ctx.emit(Instruction::Call { dst, fn_idx: rec_fn_idx, arg_reg: packed });
+                        Ok(dst)
+                    };
+                }
+
                 if let Some(builtin) = self.builtins.lookup(name) {
                     let dst = ctx.alloc_reg();
                     ctx.emit(Instruction::CallBuiltin { dst, builtin, args: vec![arg_reg] });
@@ -884,28 +915,34 @@ impl Lowerer {
     }
 
     /// Resolve a bare function name to a fully-qualified name that exists in
-    /// `user_fns`, searching: bare name → child helper → sibling helper.
+    /// `user_fns`, searching: bare name → child helper → ancestor siblings.
     ///
-    /// - Child:   `ctx.name::bare`   — a helper defined on the current function
-    /// - Sibling: `parent::bare`     — a helper defined alongside the current function
+    /// - Child:            `ctx.name::bare`
+    /// - Sibling / ancestor sibling: walk up all `::` levels until a match is found
+    ///
+    /// This allows `helpers:` functions (registered as `fn_name::helper`) to be
+    /// called from inside deeply-nested named capturing helpers.
     ///
     /// Returns `None` if no match is found.
     fn resolve_scoped_fn(&self, ctx: &FnCtx, bare: &str) -> Option<String> {
         if self.user_fns.contains(bare) {
             return Some(bare.to_string());
         }
-        // Child helper: solve::currentFn::bare
+        // Child helper: ctx.name::bare
         let as_child = format!("{}::{}", ctx.name, bare);
         if self.user_fns.contains(as_child.as_str()) {
             return Some(as_child);
         }
-        // Sibling helper: solve::bare  (strip last segment from ctx.name)
-        if let Some(sep) = ctx.name.rfind("::") {
-            let parent = &ctx.name[..sep];
-            let as_sibling = format!("{}::{}", parent, bare);
-            if self.user_fns.contains(as_sibling.as_str()) {
-                return Some(as_sibling);
+        // Walk all ancestor levels so helpers: functions are reachable from
+        // any depth of closure nesting (e.g. solve::closureA@0::closureB@1 → solve::helper).
+        let mut scope = ctx.name.as_str();
+        while let Some(sep) = scope.rfind("::") {
+            let parent = &scope[..sep];
+            let candidate = format!("{}::{}", parent, bare);
+            if self.user_fns.contains(candidate.as_str()) {
+                return Some(candidate);
             }
+            scope = parent;
         }
         None
     }
@@ -1411,6 +1448,7 @@ impl Lowerer {
         name: &str,
         body: &Expr,
         rest: &Expr,
+        recursive: bool,
         tail: bool,
     ) -> Result<usize, LowerError> {
         // Collect all currently-in-scope variables as captures.
@@ -1432,7 +1470,8 @@ impl Lowerer {
         self.user_fns.insert(lifted_name.clone());
 
         // Lower the closure body into a fresh FnCtx and replace the placeholder.
-        let kfn = self.lower_closure_body(&lifted_name, body, &captures)?;
+        let rec_info = if recursive { Some((name, fn_idx)) } else { None };
+        let kfn = self.lower_closure_body(&lifted_name, body, &captures, rec_info)?;
         self.module.fns[fn_idx] = kfn;
 
         // Emit MakeClosure into the enclosing function's instruction stream.
@@ -1464,6 +1503,7 @@ impl Lowerer {
         lifted_name: &str,
         body: &Expr,
         captures: &[(String, usize)],
+        rec_info: Option<(&str, usize)>,
     ) -> Result<KelnFn, LowerError> {
         let mut ctx = FnCtx::new(lifted_name);
         // R0 = merged record { it: <arg>, cap1: v1, ... }
@@ -1478,6 +1518,12 @@ impl Lowerer {
             let cap_reg = ctx.alloc_named_reg(cap_name);
             ctx.emit(Instruction::FieldGet { dst: cap_reg, src: 0, field_idx: k + 1 });
             ctx.bind_var(cap_name, cap_reg);
+        }
+
+        // For let rec: record self so lower_call can emit a direct self-call.
+        if let Some((bare_name, fn_idx)) = rec_info {
+            let cap_names: Vec<String> = captures.iter().map(|(n, _)| n.clone()).collect();
+            ctx.rec_fn = Some((bare_name.to_string(), fn_idx, cap_names));
         }
 
         // Lower body in tail position.

@@ -1209,6 +1209,48 @@ fn testOr {
 }
 
 // =============================================================================
+// Debug.print — pass-through, prints to stderr and returns value unchanged
+// =============================================================================
+
+#[test]
+fn test_vm_debug_print_int_passthrough() {
+    let src = r#"
+fn debugIdentity {
+    IO Int -> Int
+    in: n
+    out: Debug.print(n)
+}
+"#;
+    assert_both_backends(src, "debugIdentity", Value::Int(42), Value::Int(42));
+}
+
+#[test]
+fn test_vm_debug_print_string_passthrough() {
+    let src = r#"
+fn debugStr {
+    IO String -> String
+    in: s
+    out: Debug.print(s)
+}
+"#;
+    assert_both_backends(src, "debugStr", Value::Str("hello".into()), Value::Str("hello".into()));
+}
+
+#[test]
+fn test_vm_debug_print_inline() {
+    let src = r#"
+fn compute {
+    IO Int -> Int
+    in: n
+    out:
+        let x = Debug.print(n * 2) in
+        x + 1
+}
+"#;
+    assert_both_backends(src, "compute", Value::Int(5), Value::Int(11));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 

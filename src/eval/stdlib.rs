@@ -178,6 +178,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "GraphQL.query"
             | "File.read"
             | "File.readLines"
+            | "Debug.print"
     )
 }
 
@@ -1131,6 +1132,16 @@ pub fn dispatch(
             let level = name.split('.').nth(1).unwrap_or("log");
             println!("[{}] {}", level.to_uppercase(), v);
             Ok(Value::Unit)
+        }
+
+        // =====================================================================
+        // Debug.print — pass-through that prints any value to stderr and
+        // returns it unchanged. Requires IO effect on the calling function.
+        // =====================================================================
+        "Debug.print" => {
+            let v = one(args, name)?;
+            eprintln!("[DEBUG] {}", v);
+            Ok(v)
         }
 
         // =====================================================================

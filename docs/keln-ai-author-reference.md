@@ -602,6 +602,39 @@ Log.warn  { Log NonEmptyString -> Unit }
 Log.error { Log NonEmptyString -> Unit }
 ```
 
+### Debugging
+
+```keln
+Debug.print { IO T -> T }
+```
+
+**Pass-through** — prints the value to `stderr` as `[DEBUG] <value>` and returns it
+unchanged. Works with any type. Requires `IO` effect on the containing function.
+
+**Inline use (inspect without restructuring):**
+```keln
+fn computeSum {
+    IO List<Int> -> Int
+    in: items
+    out: List.fold(items, 0, addStep)
+    helpers: {
+        addStep :: IO { acc: Int, item: Int } -> Int =>
+            let next = Debug.print(it.acc + it.item) in
+            next
+    }
+}
+```
+
+**Pipeline use:**
+```keln
+let result = fetchData(id)
+           |> Debug.print
+           |> processResult
+```
+
+> **Remove before committing.** `Debug.print` is a development tool — the `IO`
+> annotation on the function signature is a visible reminder that it is present.
+
 ---
 
 ## 9. Ownership and Cloning
@@ -735,6 +768,86 @@ List.fold(items, { x: 0, y: 0, result: 0 }, step)
 - **Supported everywhere**: `keln verify`, `keln run`, and `keln compile`/`keln run-bc` (bytecode VM). Gap 17 added closure lifting to the VM.
 - **`threshold` is a reserved keyword** — do not use it as a field or variable name.
   Use `cutoff`, `limit`, `max_val`, etc. instead.
+- **`helpers:` functions are callable from inside named capturing helpers** — bare
+  function names resolve up through all ancestor scopes in the bytecode VM.
+
+### let rec — Recursive Named Capturing Helpers
+
+Use `let rec` when the helper needs to call itself:
+
+**Syntax:**
+```keln
+let rec <name> :: <effects> <In> -> <Out> => <body> in <rest>
+```
+
+- `name` is in scope inside `body` as well as `rest`, enabling self-calls
+- Captures work exactly like non-recursive helpers
+- Works in both tree-walker and bytecode VM
+
+**Example — recursive countdown with captured context:**
+```keln
+fn sumToLimit {
+    Pure { start: Int, limit: Int } -> Int
+    in: args
+    out:
+        let rec loop :: Pure Int -> Int =>
+            match it == args.limit {
+                true  -> it
+                false -> it + loop(it + 1)
+            }
+        in
+        loop(args.start)
+}
+```
+
+**Example — factorial:**
+```keln
+fn factorial {
+    Pure Int -> Int
+    in: n
+    out:
+        let rec fact :: Pure Int -> Int =>
+            match it {
+                0 -> 1
+                n -> n * fact(n - 1)
+            }
+        in
+        fact(n)
+}
+```
+
+> **Note:** `rec` is NOT a reserved keyword and can still be used as a variable
+> name in other contexts (e.g., `let rec = { ... } in ...`).
+
+### Boolean Operators — `not`, `and`, `or`
+
+Boolean logic is available as expression-form operators in any expression context,
+not just `forall`/`verify` blocks.
+
+**Syntax:**
+```keln
+not(expr)           -- logical negation
+and(expr_a, expr_b) -- short-circuit AND (evaluates b only if a is true)
+or(expr_a, expr_b)  -- short-circuit OR  (evaluates b only if a is false)
+```
+
+These desugar to `match` expressions, so they have the same semantics as
+the corresponding `match b { true -> ..., false -> ... }` patterns.
+
+**Example:**
+```keln
+let isValid = and(n > 0, n < 100) in
+let onBoundary = or(n == 0, n == 100) in
+let flipped = not(flag) in
+```
+
+**Composable with any expression:**
+```keln
+match or(found, fallback != 0) {
+    true  -> found
+    false -> Nothing
+}
+```
 
 **Eliminating `it.acc.` indirection in fold helpers — record destructuring in `let`:**
 ```keln

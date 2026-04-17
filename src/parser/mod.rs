@@ -696,8 +696,8 @@ impl Parser {
     fn parse_verify_stmt(&mut self) -> Result<VerifyStmt, ParseError> {
         match self.peek_value() {
             Some("mock") => Ok(VerifyStmt::Mock(self.parse_mock_decl()?)),
-            Some("given") => Ok(VerifyStmt::Given(self.parse_given_case()?)),
-            Some("forall") => Ok(VerifyStmt::ForAll(self.parse_forall_property()?)),
+            Some("given") => Ok(VerifyStmt::Given(Box::new(self.parse_given_case()?))),
+            Some("forall") => Ok(VerifyStmt::ForAll(Box::new(self.parse_forall_property()?))),
             _ => Err(self.error_here("expected mock, given, or forall in verify block")),
         }
     }
@@ -1158,6 +1158,56 @@ impl Parser {
             (TT_KEYWORD, "select") => self.parse_select_expr(),
             (TT_KEYWORD, "clone") => self.parse_clone_expr(),
             (TT_KEYWORD, "let") => self.parse_let_expr(),
+            // Boolean operators as expression forms — desugar to match for short-circuit semantics.
+            // not(e)    → match e { true -> false, false -> true }
+            // and(a, b) → match a { true -> b,     false -> false }
+            // or(a, b)  → match a { true -> true,  false -> b }
+            (TT_KEYWORD, "not") => {
+                self.advance()?;
+                self.expect_symbol("(")?;
+                let e = self.parse_expr()?;
+                self.expect_symbol(")")?;
+                Ok(Expr::Match {
+                    scrutinee: Box::new(e),
+                    arms: vec![
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(true, span.clone()))),  body: Box::new(Expr::BoolLiteral(false, span.clone())), span: span.clone() },
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(false, span.clone()))), body: Box::new(Expr::BoolLiteral(true,  span.clone())), span: span.clone() },
+                    ],
+                    span,
+                })
+            }
+            (TT_KEYWORD, "and") => {
+                self.advance()?;
+                self.expect_symbol("(")?;
+                let a = self.parse_expr()?;
+                self.expect_symbol(",")?;
+                let b = self.parse_expr()?;
+                self.expect_symbol(")")?;
+                Ok(Expr::Match {
+                    scrutinee: Box::new(a),
+                    arms: vec![
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(true, span.clone()))),  body: Box::new(b), span: span.clone() },
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(false, span.clone()))), body: Box::new(Expr::BoolLiteral(false, span.clone())), span: span.clone() },
+                    ],
+                    span,
+                })
+            }
+            (TT_KEYWORD, "or") => {
+                self.advance()?;
+                self.expect_symbol("(")?;
+                let a = self.parse_expr()?;
+                self.expect_symbol(",")?;
+                let b = self.parse_expr()?;
+                self.expect_symbol(")")?;
+                Ok(Expr::Match {
+                    scrutinee: Box::new(a),
+                    arms: vec![
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(true, span.clone()))),  body: Box::new(Expr::BoolLiteral(true, span.clone())), span: span.clone() },
+                        MatchArm { pattern: Pattern::Literal(Box::new(Expr::BoolLiteral(false, span.clone()))), body: Box::new(b), span: span.clone() },
+                    ],
+                    span,
+                })
+            }
             (TT_KEYWORD, _) => Err(self.error_here(&format!("unexpected keyword '{}' in expression", tok.value))),
             (TT_SYMBOL, "_") => { self.advance()?; Ok(Expr::Wildcard(span)) }
             (TT_SYMBOL, "(") => {
@@ -1447,7 +1497,18 @@ impl Parser {
             && self.peek_nth(2)
             .map(|t| t.token_type == TT_OPERATOR && t.value == "::")
             .unwrap_or(false);
-        if is_closure {
+        // Detect `let rec name ::` — recursive named capturing helper form.
+        // `rec` is NOT a keyword (to preserve `let rec = ...` bindings); match by value only.
+        let is_rec_closure = self.peek_nth(1)
+            .map(|t| t.value == "rec")
+            .unwrap_or(false)
+            && self.peek_nth(2)
+            .map(|t| t.token_type == TT_WORD && t.value.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false))
+            .unwrap_or(false)
+            && self.peek_nth(3)
+            .map(|t| t.token_type == TT_OPERATOR && t.value == "::")
+            .unwrap_or(false);
+        if is_closure || is_rec_closure {
             return self.parse_closure_let_expr();
         }
         let binding = self.parse_let_binding()?;
@@ -1464,6 +1525,12 @@ impl Parser {
     fn parse_closure_let_expr(&mut self) -> Result<Expr, ParseError> {
         let span = self.current_span();
         self.expect_keyword("let")?;
+        let recursive = if self.peek_value() == Some("rec") {
+            self.advance()?;
+            true
+        } else {
+            false
+        };
         let (name, _) = self.expect_lower_ident()?;
         self.expect_operator("::")?;
         let effects = self.parse_effect_set()?;
@@ -1476,6 +1543,7 @@ impl Parser {
         let rest = self.parse_expr()?;
         Ok(Expr::ClosureExpr {
             name,
+            recursive,
             effects,
             input_type,
             output_type,

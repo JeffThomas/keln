@@ -1158,6 +1158,122 @@ fn finalAcc {
     }
 
     // =========================================================================
+    // Fix: helpers: functions visible from named capturing helpers (closures)
+    // =========================================================================
+
+    const HELPERS_VISIBLE_FROM_CLOSURE_SRC: &str = r#"
+fn compute {
+    Pure Int -> Int
+    in: n
+    out:
+        let doubled :: Pure Int -> Int => double(it) in
+        doubled(n)
+    helpers: {
+        double :: Pure Int -> Int => it * 2
+    }
+}
+"#;
+
+    #[test]
+    fn test_helpers_visible_from_closure() {
+        assert_eq!(eval_fn(HELPERS_VISIBLE_FROM_CLOSURE_SRC, "compute", Value::Int(5)), Ok(Value::Int(10)));
+        assert_eq!(eval_fn(HELPERS_VISIBLE_FROM_CLOSURE_SRC, "compute", Value::Int(0)), Ok(Value::Int(0)));
+    }
+
+    // =========================================================================
+    // Fix: let rec — recursive named capturing helpers
+    // =========================================================================
+
+    const LET_REC_SRC: &str = r#"
+fn countdown {
+    Pure Int -> Int
+    in: n
+    out:
+        let rec loop :: Pure Int -> Int =>
+            match it {
+                0 -> 0
+                n -> loop(n - 1)
+            }
+        in
+        loop(n)
+}
+
+fn factorial {
+    Pure Int -> Int
+    in: n
+    out:
+        let rec fact :: Pure Int -> Int =>
+            match it {
+                0 -> 1
+                n -> n * fact(n - 1)
+            }
+        in
+        fact(n)
+}
+"#;
+
+    #[test]
+    fn test_let_rec_countdown() {
+        assert_eq!(eval_fn(LET_REC_SRC, "countdown", Value::Int(10)), Ok(Value::Int(0)));
+        assert_eq!(eval_fn(LET_REC_SRC, "countdown", Value::Int(0)),  Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn test_let_rec_factorial() {
+        assert_eq!(eval_fn(LET_REC_SRC, "factorial", Value::Int(0)), Ok(Value::Int(1)));
+        assert_eq!(eval_fn(LET_REC_SRC, "factorial", Value::Int(5)), Ok(Value::Int(120)));
+        assert_eq!(eval_fn(LET_REC_SRC, "factorial", Value::Int(7)), Ok(Value::Int(5040)));
+    }
+
+    // =========================================================================
+    // Fix: and/or/not as boolean expression operators
+    // =========================================================================
+
+    const BOOL_OPS_SRC: &str = r#"
+fn testNot {
+    Pure Bool -> Bool
+    in: b
+    out: not(b)
+}
+
+fn testAnd {
+    Pure { a: Bool, b: Bool } -> Bool
+    in: args
+    out: and(args.a, args.b)
+}
+
+fn testOr {
+    Pure { a: Bool, b: Bool } -> Bool
+    in: args
+    out: or(args.a, args.b)
+}
+"#;
+
+    fn bool_rec(a: bool, b: bool) -> Value {
+        Value::make_record(&["a", "b"], vec![Value::Bool(a), Value::Bool(b)])
+    }
+
+    #[test]
+    fn test_expr_not() {
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testNot", Value::Bool(true)),  Ok(Value::Bool(false)));
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testNot", Value::Bool(false)), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_expr_and() {
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testAnd", bool_rec(true,  true)),  Ok(Value::Bool(true)));
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testAnd", bool_rec(true,  false)), Ok(Value::Bool(false)));
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testAnd", bool_rec(false, true)),  Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_expr_or() {
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testOr", bool_rec(false, false)), Ok(Value::Bool(false)));
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testOr", bool_rec(false, true)),  Ok(Value::Bool(true)));
+        assert_eq!(eval_fn(BOOL_OPS_SRC, "testOr", bool_rec(true,  false)), Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
     // Regression 3: Lexer InputString truncation at 1024 characters.
     // Before the fix, lexxor::InputString silently truncated source to 1024
     // chars. Programs longer than that would fail to parse or lose definitions.

@@ -345,6 +345,8 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "Map.foldUntil",
     // List.mapFold (175)
     "List.mapFold",
+    // Debug.print (176)
+    "Debug.print",
 ];
 
 pub struct BuiltinTable {

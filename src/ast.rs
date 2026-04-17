@@ -228,8 +228,8 @@ pub enum PatternSource {
 #[derive(Debug, Clone)]
 pub enum VerifyStmt {
     Mock(MockDecl),
-    Given(GivenCase),
-    ForAll(ForAllProperty),
+    Given(Box<GivenCase>),
+    ForAll(Box<ForAllProperty>),
 }
 
 #[derive(Debug, Clone)]
