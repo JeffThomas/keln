@@ -262,9 +262,12 @@ impl Evaluator {
                             self.bind_pattern_to_env(&binding.pattern, v);
                             cur = body;
                         }
-                        ast::Expr::ClosureExpr { name, body, rest, .. } => {
-                            let captured = self.env.snapshot();
+                        ast::Expr::ClosureExpr { name, body, rest, recursive, .. } => {
                             let id = self.closure_table.len();
+                            let mut captured = self.env.snapshot();
+                            if *recursive {
+                                captured.push((name.clone(), Value::Closure { id }));
+                            }
                             self.closure_table.push((*body.clone(), captured));
                             self.env.push_scope();
                             scopes += 1;
@@ -679,6 +682,11 @@ impl Evaluator {
         }
         if self.fns.contains_key(name) || self.mock_fns.contains_key(name) {
             return self.call_fn(name, arg);
+        }
+        // Fallback: a closure bound in the environment (handles `let rec` self-calls
+        // where the closure name is not a declared function).
+        if let Some(v @ Value::Closure { .. }) = self.env.lookup(name).cloned() {
+            return self.call_value(v, arg, span);
         }
         Err(RuntimeError::at(format!("undefined function '{}'", name), span))
     }

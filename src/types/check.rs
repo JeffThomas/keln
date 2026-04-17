@@ -875,7 +875,7 @@ impl Checker {
             }
 
             ast::Expr::Paren(inner, _) => self.infer_expr(inner),
-            ast::Expr::ClosureExpr { name, effects, input_type, output_type, body, rest, span } => {
+            ast::Expr::ClosureExpr { name, effects, input_type, output_type, body, rest, span, .. } => {
                 let eff = EffectSet::from_names(&effects.effects);
                 let inp = self.resolve_type_expr(input_type, &[]);
                 let out = self.resolve_type_expr(output_type, &[]);

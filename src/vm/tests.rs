@@ -1095,6 +1095,120 @@ fn sumAndList {
 }
 
 // =============================================================================
+// Fix: helpers: functions visible from named capturing helpers (VM backend)
+// =============================================================================
+
+#[test]
+fn test_vm_helpers_visible_from_closure() {
+    let src = r#"
+fn compute {
+    Pure Int -> Int
+    in: n
+    out:
+        let doubled :: Pure Int -> Int => double(it) in
+        doubled(n)
+    helpers: {
+        double :: Pure Int -> Int => it * 2
+    }
+}
+"#;
+    assert_both_backends(src, "compute", Value::Int(5),  Value::Int(10));
+    assert_both_backends(src, "compute", Value::Int(7),  Value::Int(14));
+}
+
+// =============================================================================
+// Fix: let rec — recursive named capturing helpers (VM backend)
+// =============================================================================
+
+#[test]
+fn test_vm_let_rec_factorial() {
+    let src = r#"
+fn factorial {
+    Pure Int -> Int
+    in: n
+    out:
+        let rec fact :: Pure Int -> Int =>
+            match it {
+                0 -> 1
+                n -> n * fact(n - 1)
+            }
+        in
+        fact(n)
+}
+"#;
+    assert_both_backends(src, "factorial", Value::Int(0), Value::Int(1));
+    assert_both_backends(src, "factorial", Value::Int(5), Value::Int(120));
+    assert_both_backends(src, "factorial", Value::Int(6), Value::Int(720));
+}
+
+#[test]
+fn test_vm_let_rec_captures_context() {
+    let src = r#"
+fn sumUpTo {
+    Pure { start: Int, limit: Int } -> Int
+    in: args
+    out:
+        let rec loop :: Pure Int -> Int =>
+            match it == args.limit {
+                true  -> it
+                false -> it + loop(it + 1)
+            }
+        in
+        loop(args.start)
+}
+"#;
+    let input = Value::make_record(&["start", "limit"], vec![Value::Int(1), Value::Int(5)]);
+    assert_both_backends(src, "sumUpTo", input, Value::Int(15));
+}
+
+// =============================================================================
+// Fix: and/or/not as boolean expression operators (VM backend)
+// =============================================================================
+
+#[test]
+fn test_vm_bool_not() {
+    let src = r#"
+fn testNot {
+    Pure Bool -> Bool
+    in: b
+    out: not(b)
+}
+"#;
+    assert_both_backends(src, "testNot", Value::Bool(true),  Value::Bool(false));
+    assert_both_backends(src, "testNot", Value::Bool(false), Value::Bool(true));
+}
+
+#[test]
+fn test_vm_bool_and() {
+    let src = r#"
+fn testAnd {
+    Pure { a: Bool, b: Bool } -> Bool
+    in: args
+    out: and(args.a, args.b)
+}
+"#;
+    let t = |a, b| Value::make_record(&["a", "b"], vec![Value::Bool(a), Value::Bool(b)]);
+    assert_both_backends(src, "testAnd", t(true,  true),  Value::Bool(true));
+    assert_both_backends(src, "testAnd", t(true,  false), Value::Bool(false));
+    assert_both_backends(src, "testAnd", t(false, true),  Value::Bool(false));
+}
+
+#[test]
+fn test_vm_bool_or() {
+    let src = r#"
+fn testOr {
+    Pure { a: Bool, b: Bool } -> Bool
+    in: args
+    out: or(args.a, args.b)
+}
+"#;
+    let t = |a, b| Value::make_record(&["a", "b"], vec![Value::Bool(a), Value::Bool(b)]);
+    assert_both_backends(src, "testOr", t(false, false), Value::Bool(false));
+    assert_both_backends(src, "testOr", t(false, true),  Value::Bool(true));
+    assert_both_backends(src, "testOr", t(true,  false), Value::Bool(true));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 
