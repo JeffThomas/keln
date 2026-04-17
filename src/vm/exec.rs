@@ -577,7 +577,7 @@ fn exec_step(
                     };
                     let ovr_names = crate::eval::fields_of_layout(ovr_layout);
                     let mut base_names = crate::eval::fields_of_layout(base_layout);
-                    for (name, val) in ovr_names.into_iter().zip(ovr_values.into_iter()) {
+                    for (name, val) in ovr_names.into_iter().zip(ovr_values) {
                         if let Some(pos) = crate::eval::field_pos(base_layout, &name) {
                             base_values[pos] = val;
                         } else {

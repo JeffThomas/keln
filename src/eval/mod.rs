@@ -215,8 +215,8 @@ impl Ord for Value {
                 let names_b = fields_of_layout(*lb);
                 let mut pairs_a: Vec<(&str, &Value)> = names_a.iter().map(String::as_str).zip(a.iter()).collect();
                 let mut pairs_b: Vec<(&str, &Value)> = names_b.iter().map(String::as_str).zip(b.iter()).collect();
-                pairs_a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                pairs_b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_a.sort_by_key(|(k1, _)| *k1);
+                pairs_b.sort_by_key(|(k1, _)| *k1);
                 pairs_a.len().cmp(&pairs_b.len()).then_with(|| {
                     pairs_a.iter().zip(pairs_b.iter())
                         .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
@@ -262,8 +262,8 @@ impl Ord for VariantPayload {
                 let names_b = fields_of_layout(*lb);
                 let mut pairs_a: Vec<(&str, &Value)> = names_a.iter().map(String::as_str).zip(a.iter()).collect();
                 let mut pairs_b: Vec<(&str, &Value)> = names_b.iter().map(String::as_str).zip(b.iter()).collect();
-                pairs_a.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-                pairs_b.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                pairs_a.sort_by_key(|(k1, _)| *k1);
+                pairs_b.sort_by_key(|(k1, _)| *k1);
                 pairs_a.len().cmp(&pairs_b.len()).then_with(|| {
                     pairs_a.iter().zip(pairs_b.iter())
                         .map(|((k1, v1), (k2, v2))| k1.cmp(k2).then_with(|| v1.cmp(v2)))
