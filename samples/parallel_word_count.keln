@@ -1,0 +1,120 @@
+-- parallel_word_count.keln
+-- Count word frequencies across a corpus by splitting it into two chunks,
+-- counting each chunk on a separate OS thread, then merging the count maps.
+--
+-- Usage:
+--   keln run samples/parallel_word_count.keln --fn parallelWordCount \
+--     --arg '["the","quick","brown","fox","jumps","over","the","lazy","dog","the"]'
+--
+--   keln run samples/parallel_word_count.keln --fn topWord \
+--     --arg '["the","quick","brown","fox","jumps","over","the","lazy","dog","the"]'
+--
+--   keln verify samples/parallel_word_count.keln
+
+-- Count word occurrences in a single list chunk. Pure — no IO needed.
+fn countChunk {
+    Pure { words: List<String> } -> Map<String, Int>
+
+    in: args
+    out: List.fold(args.words, Map.empty, tally)
+
+    confidence: 1.0
+    reason: "tally word frequencies with a fold over the chunk"
+
+    verify: {
+        given({ words: [] })                          -> Map.empty
+        given({ words: ["a", "b", "a"] })             -> Map.insert(Map.insert(Map.empty, "a", 2), "b", 1)
+        given({ words: ["x", "x", "x"] })             -> Map.insert(Map.empty, "x", 3)
+    }
+
+    helpers: {
+        tally :: Pure { acc: Map<String, Int>, item: String } -> Map<String, Int> =>
+            let cur = Map.getOr(it.acc, it.item, 0) in
+            Map.insert(it.acc, it.item, cur + 1)
+    }
+}
+
+-- Merge two count maps by adding values for matching keys.
+fn mergeCounts {
+    Pure { base: Map<String, Int>, patch: Map<String, Int> } -> Map<String, Int>
+
+    in: args
+    out: Map.fold(args.patch, args.base, mergeEntry)
+
+    confidence: 1.0
+    reason: "fold patch into base, summing counts for shared keys"
+
+    verify: {
+        given({ base: Map.empty, patch: Map.empty }) -> Map.empty
+        given({
+            base:  Map.insert(Map.empty, "a", 2),
+            patch: Map.insert(Map.empty, "a", 3)
+        }) -> Map.insert(Map.empty, "a", 5)
+        given({
+            base:  Map.insert(Map.empty, "a", 1),
+            patch: Map.insert(Map.empty, "b", 4)
+        }) -> Map.insert(Map.insert(Map.empty, "a", 1), "b", 4)
+    }
+
+    helpers: {
+        mergeEntry :: Pure { acc: Map<String, Int>, key: String, value: Int } -> Map<String, Int> =>
+            let existing = Map.getOr(it.acc, it.key, 0) in
+            Map.insert(it.acc, it.key, existing + it.value)
+    }
+}
+
+-- Split the corpus in half, count each half in parallel, merge results.
+fn parallelWordCount {
+    IO List<String> -> Map<String, Int>
+
+    in: words
+    out: do {
+        let half   = List.len(words) / 2
+        let chunk1 = List.take(words, half)
+        let chunk2 = List.drop(words, half)
+        let t1     = Task.spawn(countChunk.with({words: chunk1}))
+        let t2     = Task.spawn(countChunk.with({words: chunk2}))
+        let parts  = Task.awaitAll([t1, t2])
+        let m1     = List.getOr(parts, 0, Map.empty)
+        let m2     = List.getOr(parts, 1, Map.empty)
+        mergeCounts({base: m1, patch: m2})
+    }
+
+    confidence: auto
+    reason: "2-way parallel fan-out; merge-by-sum reduce"
+
+    verify: {
+        given([])                                  -> Map.empty
+        given(["a", "b", "a"])                     -> Map.insert(Map.insert(Map.empty, "a", 2), "b", 1)
+        given(["x", "x", "x", "x"])               -> Map.insert(Map.empty, "x", 4)
+    }
+}
+
+-- Return the most frequently occurring word in the corpus.
+-- Ties are broken by whichever key Map.fold encounters last (alphabetical order).
+fn topWord {
+    IO List<String> -> String
+
+    in: words
+    out: do {
+        let counts = parallelWordCount(words)
+        let top    = Map.fold(counts, {word: "", count: 0}, pickHigher)
+        top.word
+    }
+
+    confidence: auto
+    reason: "find max-count entry via Map.fold after parallel count"
+
+    verify: {
+        given(["a", "b", "a"])                                   -> "a"
+        given(["the", "fox", "the", "dog", "the"])               -> "the"
+    }
+
+    helpers: {
+        pickHigher :: Pure { acc: { word: String, count: Int }, key: String, value: Int } -> { word: String, count: Int } =>
+            match it.value > it.acc.count {
+                true  -> { word: it.key, count: it.value }
+                false -> it.acc
+            }
+    }
+}

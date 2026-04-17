@@ -464,7 +464,7 @@ Set.difference  { Pure Set<T>, Set<T>                  -> Set<T>               }
 Set.size        { Pure Set<T>                          -> Int                  }
 ```
 
-**Performance — Map, Set, and List are copy-on-write (Rc-backed):**
+**Performance — Map, Set, and List are copy-on-write (Arc-backed):**
 Cloning a `Map`, `Set`, or `List` value is O(1) — it bumps a reference count, not the data. Mutation (`Map.insert`, `Set.insert`, `List.append`, etc.) is O(log N) or O(1) amortized in-place when you are the sole owner (the normal case inside a fold step). A full data copy only happens when the same value is referenced from two places simultaneously. This means `Map`, `Set`, and `List` are safe and efficient as fold accumulators.
 
 **However:** if a large `Map`, `Set`, or `List` is **read-only** during a fold, keep it *out* of the accumulator entirely — capture it via a named capturing helper instead. See §10a.
@@ -564,10 +564,53 @@ Clock.sleep  { IO   Duration   -> Unit       }
 ### Task
 ```keln
 Task.spawn      { IO FunctionRef<IO,Unit,T>  -> Task<T>   }
+Task.await      { IO Task<T>                 -> T         }
 Task.awaitAll   { IO List<Task<T>>           -> List<T>   }
 Task.awaitFirst { IO List<Task<T>>           -> T         }
 Task.race       { IO List<Task<T>>           -> T         }
 ```
+
+**`Task.spawn` runs in a real OS thread.** Each spawned task gets a fresh evaluator with a full copy of the program. Spawned tasks are truly parallel — they execute on separate OS threads with no shared mutable state.
+
+**Passing data to a task via `.with()`:** `Task.spawn` accepts a `PartialFn` created with `.with({field: value})`. The bound fields are assembled into a **record** and passed as the task's argument. The target function **must accept a record input type** — not a scalar. Use `in: args` and access fields via `args.field`.
+
+```keln
+-- CORRECT: function accepts a record input
+fn processChunk { IO { xs: List<Int> } -> Int
+    in: args
+    out: List.fold(args.xs, 0, sumStep)
+    ...
+}
+-- spawn with bound data:
+let t = Task.spawn(processChunk.with({xs: myList}))
+
+-- WRONG: function accepts a scalar — .with() will wrap it in a record
+fn processChunk { IO List<Int> -> Int
+    in: xs          -- xs = { xs: myList }, NOT myList
+    out: List.fold(xs, 0, sumStep)   -- runtime error: xs is a record, not a List
+}
+```
+
+**Fan-out / reduce pattern:**
+```keln
+fn run { IO Unit -> Int
+    in: _
+    out: do {
+        let all    = List.range(1, 101)
+        let chunk1 = List.take(all, 50)
+        let chunk2 = List.drop(all, 50)
+        let t1 = Task.spawn(sumChunk.with({xs: chunk1}))
+        let t2 = Task.spawn(sumChunk.with({xs: chunk2}))
+        let parts = Task.awaitAll([t1, t2])
+        List.fold(parts, 0, addInt)
+    }
+    helpers: {
+        addInt :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+```
+
+**`Task.awaitAll` preserves spawn order** — results are returned in the same order as the input list, regardless of which task finishes first.
 
 ### Channels and Select
 ```keln

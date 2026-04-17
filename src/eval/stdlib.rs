@@ -1,5 +1,5 @@
-use std::rc::Rc;
-use super::{RuntimeError, Value, VariantPayload};
+use std::sync::{Arc, OnceLock, Mutex};
+use super::{RuntimeError, TaskHandle, Value, VariantPayload};
 use super::eval::Evaluator;
 
 /// Return true if `name` is a built-in stdlib function.
@@ -266,7 +266,7 @@ pub fn dispatch(
             match v {
                 Value::List(items) => {
                     let mut oks = Vec::new();
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         match item {
                             Value::Variant { name, payload: VariantPayload::Tuple(inner) }
                                 if name == "Ok" =>
@@ -279,7 +279,7 @@ pub fn dispatch(
                             other => oks.push(other),
                         }
                     }
-                    Ok(ok(Value::List(Rc::new(oks))))
+                    Ok(ok(Value::List(Arc::new(oks))))
                 }
                 _ => Err(RuntimeError::new("Result.sequence: expected List")),
             }
@@ -365,10 +365,10 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut result = Vec::with_capacity(items.len());
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         result.push(ev.call_value(f.clone(), item, &sp())?);
                     }
-                    Ok(Value::List(Rc::new(result)))
+                    Ok(Value::List(Arc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.map: expected List")),
             }
@@ -378,12 +378,12 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut result = Vec::new();
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         if ev.call_value(f.clone(), item.clone(), &sp())? == Value::Bool(true) {
                             result.push(item);
                         }
                     }
-                    Ok(Value::List(Rc::new(result)))
+                    Ok(Value::List(Arc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.filter: expected List")),
             }
@@ -394,7 +394,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), arg, &sp())?;
                     }
@@ -407,7 +407,7 @@ pub fn dispatch(
             let (list, init, f) = three(args, "List.foldr")?;
             match list {
                 Value::List(items) => {
-                    let mut items = Rc::unwrap_or_clone(items);
+                    let mut items = Arc::unwrap_or_clone(items);
                     items.reverse();
                     let mut acc = init;
                     for item in items {
@@ -460,7 +460,7 @@ pub fn dispatch(
             match v {
                 Value::List(mut rc) => {
                     if !rc.is_empty() {
-                        Rc::make_mut(&mut rc).remove(0);
+                        Arc::make_mut(&mut rc).remove(0);
                     }
                     Ok(Value::List(rc))
                 }
@@ -471,7 +471,7 @@ pub fn dispatch(
             let (list, item) = two(args, "List.append")?;
             match list {
                 Value::List(mut rc) => {
-                    Rc::make_mut(&mut rc).push(item);
+                    Arc::make_mut(&mut rc).push(item);
                     Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.append: expected List")),
@@ -481,7 +481,7 @@ pub fn dispatch(
             let (list, item) = two(args, "List.prepend")?;
             match list {
                 Value::List(mut rc) => {
-                    Rc::make_mut(&mut rc).insert(0, item);
+                    Arc::make_mut(&mut rc).insert(0, item);
                     Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.prepend: expected List")),
@@ -491,7 +491,7 @@ pub fn dispatch(
             let (a, b) = two(args, "List.concat")?;
             match (a, b) {
                 (Value::List(mut rc_a), Value::List(rc_b)) => {
-                    Rc::make_mut(&mut rc_a).extend(Rc::unwrap_or_clone(rc_b));
+                    Arc::make_mut(&mut rc_a).extend(Arc::unwrap_or_clone(rc_b));
                     Ok(Value::List(rc_a))
                 }
                 _ => Err(RuntimeError::new("List.concat: expected two Lists")),
@@ -501,7 +501,7 @@ pub fn dispatch(
             let v = one(args, "List.reverse")?;
             match v {
                 Value::List(mut rc) => {
-                    Rc::make_mut(&mut rc).reverse();
+                    Arc::make_mut(&mut rc).reverse();
                     Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.reverse: expected List")),
@@ -511,7 +511,7 @@ pub fn dispatch(
             let (list, f) = two(args, "List.find")?;
             match list {
                 Value::List(items) => {
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         if ev.call_value(f.clone(), item.clone(), &sp())? == Value::Bool(true) {
                             return Ok(some(item));
                         }
@@ -525,7 +525,7 @@ pub fn dispatch(
             let (list, f) = two(args, "List.findMap")?;
             match list {
                 Value::List(items) => {
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         let result = ev.call_value(f.clone(), item, &sp())?;
                         if is_variant(&result, "Some") {
                             return Ok(result);
@@ -547,7 +547,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     let mut acc = init;
                     let mut out: Vec<Value> = Vec::with_capacity(items.len());
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
                         let result = ev.call_value(f.clone(), arg, &sp())?;
                         match result {
@@ -562,7 +562,7 @@ pub fn dispatch(
                             _ => return Err(RuntimeError::new("List.mapFold: step fn must return {acc, out}")),
                         }
                     }
-                    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
+                    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Arc::new(out))]))
                 }
                 _ => Err(RuntimeError::new("List.mapFold: expected List")),
             }
@@ -578,7 +578,7 @@ pub fn dispatch(
             let (list, n) = two(args, "List.take")?;
             match (list, n) {
                 (Value::List(items), Value::Int(n)) => {
-                    Ok(Value::List(Rc::new(items.iter().take(n.max(0) as usize).cloned().collect())))
+                    Ok(Value::List(Arc::new(items.iter().take(n.max(0) as usize).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("List.take: expected List and Int")),
             }
@@ -587,7 +587,7 @@ pub fn dispatch(
             let (list, n) = two(args, "List.drop")?;
             match (list, n) {
                 (Value::List(items), Value::Int(n)) => {
-                    Ok(Value::List(Rc::new(items.iter().skip(n.max(0) as usize).cloned().collect())))
+                    Ok(Value::List(Arc::new(items.iter().skip(n.max(0) as usize).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("List.drop: expected List and Int")),
             }
@@ -595,7 +595,7 @@ pub fn dispatch(
         "List.zip" => {
             let (a, b) = two(args, "List.zip")?;
             match (a, b) {
-                (Value::List(a), Value::List(b)) => Ok(Value::List(Rc::new(
+                (Value::List(a), Value::List(b)) => Ok(Value::List(Arc::new(
                     a.iter()
                         .zip(b.iter())
                         .map(|(x, y)| {
@@ -611,13 +611,13 @@ pub fn dispatch(
             match v {
                 Value::List(items) => {
                     let mut result = Vec::new();
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         match item {
-                            Value::List(inner) => result.extend(Rc::unwrap_or_clone(inner)),
+                            Value::List(inner) => result.extend(Arc::unwrap_or_clone(inner)),
                             other => result.push(other),
                         }
                     }
-                    Ok(Value::List(Rc::new(result)))
+                    Ok(Value::List(Arc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.flatten: expected List")),
             }
@@ -627,7 +627,7 @@ pub fn dispatch(
             let (start, end) = two(args, "List.range")?;
             match (start, end) {
                 (Value::Int(s), Value::Int(e)) => {
-                    Ok(Value::List(Rc::new((s..e).map(Value::Int).collect())))
+                    Ok(Value::List(Arc::new((s..e).map(Value::Int).collect())))
                 }
                 _ => Err(RuntimeError::new("List.range: expected two Ints")),
             }
@@ -638,7 +638,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         let record = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                     }
@@ -659,7 +659,7 @@ pub fn dispatch(
             match list {
                 Value::List(items) => {
                     let mut acc = init;
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         let record = Value::make_record(&["acc", "item"], vec![acc, item]);
                         acc = ev.call_value(f.clone(), record, &sp())?;
                         if ev.call_value(pred.clone(), acc.clone(), &sp())? == Value::Bool(true) {
@@ -680,7 +680,7 @@ pub fn dispatch(
             let (value, count) = two(args, "List.repeat")?;
             match count {
                 Value::Int(n) if n >= 0 => {
-                    Ok(Value::List(Rc::new(vec![value; n as usize])))
+                    Ok(Value::List(Arc::new(vec![value; n as usize])))
                 }
                 Value::Int(n) => Err(RuntimeError::new(format!(
                     "List.repeat: count must be >= 0, got {}", n
@@ -696,7 +696,7 @@ pub fn dispatch(
             let v = one(args, "List.sort")?;
             match v {
                 Value::List(mut rc) => {
-                    Rc::make_mut(&mut rc).sort();
+                    Arc::make_mut(&mut rc).sort();
                     Ok(Value::List(rc))
                 }
                 _ => Err(RuntimeError::new("List.sort: expected List")),
@@ -728,7 +728,7 @@ pub fn dispatch(
                             result.push(rec);
                         }
                     }
-                    Ok(Value::List(Rc::new(result)))
+                    Ok(Value::List(Arc::new(result)))
                 }
                 _ => Err(RuntimeError::new("List.combinations2: expected List")),
             }
@@ -939,7 +939,7 @@ pub fn dispatch(
         "String.split" => {
             let (s, sep) = two(args, "String.split")?;
             match (s, sep) {
-                (Value::Str(s), Value::Str(sep)) => Ok(Value::List(Rc::new(
+                (Value::Str(s), Value::Str(sep)) => Ok(Value::List(Arc::new(
                     s.split(sep.as_str())
                         .map(|p| Value::Str(p.to_string()))
                         .collect(),
@@ -964,7 +964,7 @@ pub fn dispatch(
         "String.chars" => {
             let v = one(args, "String.chars")?;
             match v {
-                Value::Str(s) => Ok(Value::List(Rc::new(
+                Value::Str(s) => Ok(Value::List(Arc::new(
                     s.chars().map(|c| Value::Str(c.to_string())).collect(),
                 ))),
                 _ => Err(RuntimeError::new("String.chars: expected String")),
@@ -1075,46 +1075,120 @@ pub fn dispatch(
         }
 
         // =====================================================================
-        // Task (sync stubs — no real async in this evaluator)
+        // Task — real parallel execution via OS threads
         // =====================================================================
         "Task.spawn" => {
             let v = one(args, "Task.spawn")?;
-            let result = match &v {
-                Value::FnRef(name) => ev.call_fn(name, Value::Unit)?,
-                Value::PartialFn { name, bound } => ev.call_fn(name, Value::make_record_from_pairs(bound.clone()))?,
-                _ => v.clone(),
+            let (fn_name, fn_arg) = match v {
+                Value::FnRef(name) => (name, Value::Unit),
+                Value::PartialFn { name, bound } =>
+                    (name, Value::make_record_from_pairs(bound)),
+                _ => return Err(RuntimeError::new(
+                    "Task.spawn: expected FnRef or PartialFn")),
             };
-            Ok(Value::Task(Box::new(result)))
+            let handle = Arc::new(TaskHandle {
+                result: OnceLock::new(),
+                thread: Mutex::new(None),
+            });
+            let handle_clone = handle.clone();
+            let thread = if let Some(runner) = ev.task_runner.clone() {
+                // VM path: delegate to the bytecode runner injected by vm/exec.
+                std::thread::Builder::new()
+                    .stack_size(4 * 1024 * 1024)
+                    .spawn(move || {
+                        let res = runner(fn_name, fn_arg);
+                        let _ = handle_clone.result.set(res);
+                    })
+                    .map_err(|e| RuntimeError::new(
+                        format!("Task.spawn: failed to spawn thread: {}", e)))?
+            } else {
+                // Tree-walker path: create a fresh evaluator from the parsed program.
+                let program = ev.program.clone().ok_or_else(|| RuntimeError::new(
+                    "Task.spawn: evaluator was not loaded from source (no program available)"))?;
+                std::thread::Builder::new()
+                    .stack_size(4 * 1024 * 1024)
+                    .spawn(move || {
+                        let mut new_ev = Evaluator::from_program(program);
+                        let res = new_ev.call_fn(&fn_name, fn_arg)
+                            .map_err(|e| e.message);
+                        let _ = handle_clone.result.set(res);
+                    })
+                    .map_err(|e| RuntimeError::new(
+                        format!("Task.spawn: failed to spawn thread: {}", e)))?
+            };
+            *handle.thread.lock().unwrap() = Some(thread);
+            Ok(Value::Task(handle))
         }
         "Task.await" => {
             let v = one(args, "Task.await")?;
             match v {
-                Value::Task(inner) => Ok(*inner),
+                Value::Task(handle) => {
+                    if let Some(res) = handle.result.get() {
+                        return res.clone().map_err(RuntimeError::new);
+                    }
+                    let thread = handle.thread.lock().unwrap().take();
+                    if let Some(t) = thread {
+                        t.join().map_err(|_| RuntimeError::new("Task.await: worker thread panicked"))?;
+                    }
+                    handle.result.get()
+                        .cloned()
+                        .unwrap_or_else(|| Err("Task.await: no result set".to_string()))
+                        .map_err(RuntimeError::new)
+                }
                 other => Ok(other),
             }
         }
         "Task.awaitAll" => {
             let v = one(args, "Task.awaitAll")?;
             match v {
-                Value::List(tasks) => Ok(Value::List(Rc::new(
-                    Rc::unwrap_or_clone(tasks)
-                        .into_iter()
-                        .map(|t| match t {
-                            Value::Task(inner) => *inner,
+                Value::List(tasks) => {
+                    let mut results = Vec::with_capacity(tasks.len());
+                    for task in Arc::unwrap_or_clone(tasks) {
+                        let val = match task {
+                            Value::Task(handle) => {
+                                if let Some(res) = handle.result.get() {
+                                    res.clone().map_err(RuntimeError::new)?
+                                } else {
+                                    let thread = handle.thread.lock().unwrap().take();
+                                    if let Some(t) = thread {
+                                        t.join().map_err(|_| RuntimeError::new("Task.awaitAll: worker thread panicked"))?;
+                                    }
+                                    handle.result.get()
+                                        .cloned()
+                                        .unwrap_or_else(|| Err("Task.awaitAll: no result set".to_string()))
+                                        .map_err(RuntimeError::new)?
+                                }
+                            }
                             other => other,
-                        })
-                        .collect(),
-                ))),
+                        };
+                        results.push(val);
+                    }
+                    Ok(Value::List(Arc::new(results)))
+                }
                 _ => Err(RuntimeError::new("Task.awaitAll: expected List")),
             }
         }
         "Task.awaitFirst" | "Task.race" => {
             let v = one(args, name)?;
             match v {
-                Value::List(mut rc) if !rc.is_empty() => match Rc::make_mut(&mut rc).remove(0) {
-                    Value::Task(inner) => Ok(*inner),
-                    other => Ok(other),
-                },
+                Value::List(mut arc) if !arc.is_empty() => {
+                    match Arc::make_mut(&mut arc).remove(0) {
+                        Value::Task(handle) => {
+                            if let Some(res) = handle.result.get() {
+                                return res.clone().map_err(RuntimeError::new);
+                            }
+                            let thread = handle.thread.lock().unwrap().take();
+                            if let Some(t) = thread {
+                                t.join().map_err(|_| RuntimeError::new(format!("{}: worker thread panicked", name)))?;
+                            }
+                            handle.result.get()
+                                .cloned()
+                                .unwrap_or_else(|| Err(format!("{}: no result set", name)))
+                                .map_err(RuntimeError::new)
+                        }
+                        other => Ok(other),
+                    }
+                }
                 Value::List(_) => Err(RuntimeError::new(format!("{}: list is empty", name))),
                 _ => Err(RuntimeError::new(format!("{}: expected List<Task>", name))),
             }
@@ -1367,7 +1441,7 @@ pub fn dispatch(
         // =====================================================================
         // Map<K,V>
         // =====================================================================
-        "Map.empty" => Ok(Value::Map(Rc::new(std::collections::BTreeMap::new()))),
+        "Map.empty" => Ok(Value::Map(Arc::new(std::collections::BTreeMap::new()))),
         "Map.size" => {
             let v = one(args, "Map.size")?;
             match v {
@@ -1379,7 +1453,7 @@ pub fn dispatch(
             let (map, key, val) = three(args, "Map.insert")?;
             match map {
                 Value::Map(mut rc) => {
-                    Rc::make_mut(&mut rc).insert(key, val);
+                    Arc::make_mut(&mut rc).insert(key, val);
                     Ok(Value::Map(rc))
                 }
                 _ => Err(RuntimeError::new("Map.insert: expected Map as first arg")),
@@ -1406,7 +1480,7 @@ pub fn dispatch(
             let (map, key) = two(args, "Map.remove")?;
             match map {
                 Value::Map(mut rc) => {
-                    Rc::make_mut(&mut rc).remove(&key);
+                    Arc::make_mut(&mut rc).remove(&key);
                     Ok(Value::Map(rc))
                 }
                 _ => Err(RuntimeError::new("Map.remove: expected Map")),
@@ -1422,21 +1496,21 @@ pub fn dispatch(
         "Map.keys" => {
             let v = one(args, "Map.keys")?;
             match v {
-                Value::Map(rc) => Ok(Value::List(Rc::new(rc.keys().cloned().collect()))),
+                Value::Map(rc) => Ok(Value::List(Arc::new(rc.keys().cloned().collect()))),
                 _ => Err(RuntimeError::new("Map.keys: expected Map")),
             }
         }
         "Map.values" => {
             let v = one(args, "Map.values")?;
             match v {
-                Value::Map(rc) => Ok(Value::List(Rc::new(rc.values().cloned().collect()))),
+                Value::Map(rc) => Ok(Value::List(Arc::new(rc.values().cloned().collect()))),
                 _ => Err(RuntimeError::new("Map.values: expected Map")),
             }
         }
         "Map.toList" => {
             let v = one(args, "Map.toList")?;
             match v {
-                Value::Map(rc) => Ok(Value::List(Rc::new(
+                Value::Map(rc) => Ok(Value::List(Arc::new(
                     rc.iter().map(|(k, v)| {
                         Value::make_record(&["key", "value"], vec![k.clone(), v.clone()])
                     }).collect()
@@ -1488,7 +1562,7 @@ pub fn dispatch(
                 Value::List(items) => {
                     #[allow(clippy::mutable_key_type)]
                     let mut map = std::collections::BTreeMap::new();
-                    for item in Rc::unwrap_or_clone(items) {
+                    for item in Arc::unwrap_or_clone(items) {
                         match item {
                             Value::Record(_, mut values) if values.len() >= 2 => {
                                 let key = values.remove(0);
@@ -1498,7 +1572,7 @@ pub fn dispatch(
                             _ => return Err(RuntimeError::new("Map.fromList: each item must be {key, value}")),
                         }
                     }
-                    Ok(Value::Map(Rc::new(map)))
+                    Ok(Value::Map(Arc::new(map)))
                 }
                 _ => Err(RuntimeError::new("Map.fromList: expected List")),
             }
@@ -1508,7 +1582,7 @@ pub fn dispatch(
             match (a, b) {
                 #[allow(clippy::mutable_key_type)]
                 (Value::Map(mut rc_a), Value::Map(rc_b)) => {
-                    let map_a = Rc::make_mut(&mut rc_a);
+                    let map_a = Arc::make_mut(&mut rc_a);
                     for (k, v) in rc_b.iter() {
                         map_a.insert(k.clone(), v.clone());
                     }
@@ -1521,7 +1595,7 @@ pub fn dispatch(
         // =====================================================================
         // Set<T>
         // =====================================================================
-        "Set.empty" => Ok(Value::Set(Rc::new(std::collections::BTreeSet::new()))),
+        "Set.empty" => Ok(Value::Set(Arc::new(std::collections::BTreeSet::new()))),
         "Set.size" => {
             let v = one(args, "Set.size")?;
             match v {
@@ -1533,7 +1607,7 @@ pub fn dispatch(
             let (set, item) = two(args, "Set.insert")?;
             match set {
                 Value::Set(mut rc) => {
-                    Rc::make_mut(&mut rc).insert(item);
+                    Arc::make_mut(&mut rc).insert(item);
                     Ok(Value::Set(rc))
                 }
                 _ => Err(RuntimeError::new("Set.insert: expected Set")),
@@ -1550,7 +1624,7 @@ pub fn dispatch(
             let (set, item) = two(args, "Set.remove")?;
             match set {
                 Value::Set(mut rc) => {
-                    Rc::make_mut(&mut rc).remove(&item);
+                    Arc::make_mut(&mut rc).remove(&item);
                     Ok(Value::Set(rc))
                 }
                 _ => Err(RuntimeError::new("Set.remove: expected Set")),
@@ -1559,14 +1633,14 @@ pub fn dispatch(
         "Set.toList" => {
             let v = one(args, "Set.toList")?;
             match v {
-                Value::Set(rc) => Ok(Value::List(Rc::new(rc.iter().cloned().collect()))),
+                Value::Set(rc) => Ok(Value::List(Arc::new(rc.iter().cloned().collect()))),
                 _ => Err(RuntimeError::new("Set.toList: expected Set")),
             }
         }
         "Set.fromList" => {
             let v = one(args, "Set.fromList")?;
             match v {
-                Value::List(items) => Ok(Value::Set(Rc::new(Rc::unwrap_or_clone(items).into_iter().collect()))),
+                Value::List(items) => Ok(Value::Set(Arc::new(Arc::unwrap_or_clone(items).into_iter().collect()))),
                 _ => Err(RuntimeError::new("Set.fromList: expected List")),
             }
         }
@@ -1574,7 +1648,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.union")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(Rc::new(set_a.union(set_b.as_ref()).cloned().collect())))
+                    Ok(Value::Set(Arc::new(set_a.union(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.union: expected two Sets")),
             }
@@ -1583,7 +1657,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.intersect")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(Rc::new(set_a.intersection(set_b.as_ref()).cloned().collect())))
+                    Ok(Value::Set(Arc::new(set_a.intersection(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.intersect: expected two Sets")),
             }
@@ -1592,7 +1666,7 @@ pub fn dispatch(
             let (a, b) = two(args, "Set.difference")?;
             match (a, b) {
                 (Value::Set(set_a), Value::Set(set_b)) => {
-                    Ok(Value::Set(Rc::new(set_a.difference(set_b.as_ref()).cloned().collect())))
+                    Ok(Value::Set(Arc::new(set_a.difference(set_b.as_ref()).cloned().collect())))
                 }
                 _ => Err(RuntimeError::new("Set.difference: expected two Sets")),
             }
@@ -1693,7 +1767,7 @@ pub fn dispatch(
         // GraphQL (trusted stub)
         // =====================================================================
         "GraphQL.execute" | "GraphQL.query" => {
-            Ok(ok(Value::make_record(&["data", "errors"], vec![Value::Unit, Value::List(Rc::new(vec![]))])))
+            Ok(ok(Value::make_record(&["data", "errors"], vec![Value::Unit, Value::List(Arc::new(vec![]))])))
         }
 
         // =====================================================================
@@ -1713,7 +1787,7 @@ pub fn dispatch(
             let v = one(args, "File.readLines")?;
             match v {
                 Value::Str(path) => match std::fs::read_to_string(&path) {
-                    Ok(contents) => Ok(Value::List(Rc::new(
+                    Ok(contents) => Ok(Value::List(Arc::new(
                         contents
                             .lines()
                             .map(|l| Value::Str(l.to_string()))
@@ -1754,7 +1828,7 @@ pub fn json_to_value(j: serde_json::Value) -> Value {
         }
         serde_json::Value::String(s) => Value::Str(s),
         serde_json::Value::Array(arr) => {
-            Value::List(Rc::new(arr.into_iter().map(json_to_value).collect()))
+            Value::List(Arc::new(arr.into_iter().map(json_to_value).collect()))
         }
         serde_json::Value::Object(map) => {
             let mut names: Vec<String> = Vec::with_capacity(map.len());

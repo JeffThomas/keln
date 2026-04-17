@@ -1,5 +1,5 @@
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use crate::eval::{stdlib, ChannelInner, RuntimeError, Value, VariantPayload};
 use crate::vm::ir::{BuiltinTable, CallFrame, Constant, Frame, Instruction, KelnModule};
 
@@ -41,6 +41,27 @@ impl From<RuntimeError> for ExecError {
 // =============================================================================
 // Public entry point
 // =============================================================================
+
+/// Execute a named function, setting up the thread-local dispatch evaluator
+/// with a `task_runner` so that `Task.spawn` works from within bytecode.
+/// Use this (instead of `execute_fn`) whenever the module may call `Task.spawn`.
+pub fn execute_fn_arc(module: std::sync::Arc<KelnModule>, fn_name: &str, arg: Value) -> Result<Value, ExecError> {
+    init_dispatch_for_module(module.clone());
+    execute_fn(&module, fn_name, arg)
+}
+
+/// Install a `task_runner` on the thread-local dispatch evaluator so that
+/// `Task.spawn` bytecode calls spawn a new OS thread that re-enters the VM.
+/// Safe to call on any thread; also called automatically by each spawned worker.
+pub fn init_dispatch_for_module(module: std::sync::Arc<KelnModule>) {
+    DISPATCH_EVAL.with(|e| {
+        let m = module.clone();
+        e.borrow_mut().task_runner = Some(std::sync::Arc::new(move |fn_name: String, arg: Value| {
+            execute_fn_arc(m.clone(), &fn_name, arg)
+                .map_err(|e| e.to_string())
+        }));
+    });
+}
 
 /// Parse, lower, and execute a named function from source.
 /// This is the VM-backend equivalent of `eval::eval_fn`.
@@ -395,7 +416,7 @@ fn exec_step(
                 .iter()
                 .map(|r| frame.clone_reg(*r))
                 .collect::<Result<_, _>>()?;
-            frame.write(*dst, Value::List(Rc::new(vals)));
+            frame.write(*dst, Value::List(Arc::new(vals)));
             *ip += 1;
         }
 
@@ -433,17 +454,13 @@ fn exec_step(
         // Channel operations (sync model)
         // ------------------------------------------------------------------
         Instruction::ChanNew { dst } => {
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            let ch = Rc::new(RefCell::new(ChannelInner::new()));
+            let ch = Arc::new(Mutex::new(ChannelInner::new()));
             frame.write(*dst, Value::Channel(ch));
             *ip += 1;
         }
 
         Instruction::ChanNewCloseable { dst } => {
-            use std::cell::RefCell;
-            use std::rc::Rc;
-            let ch = Rc::new(RefCell::new(ChannelInner::new_closeable()));
+            let ch = Arc::new(Mutex::new(ChannelInner::new_closeable()));
             frame.write(*dst, Value::Channel(ch));
             *ip += 1;
         }
@@ -452,8 +469,8 @@ fn exec_step(
             let val = frame.take(*val_reg)?;
             let chan = frame.clone_reg(*chan_reg)?;
             match chan {
-                Value::Channel(rc) => {
-                    let mut inner = rc.borrow_mut();
+                Value::Channel(arc) => {
+                    let mut inner = arc.lock().unwrap();
                     if inner.closed {
                         return Err(ExecError::new("CHAN_SEND: channel is closed"));
                     }
@@ -467,8 +484,8 @@ fn exec_step(
         Instruction::ChanRecv { dst, chan_reg } => {
             let chan = frame.clone_reg(*chan_reg)?;
             let val = match &chan {
-                Value::Channel(rc) => {
-                    let mut inner = rc.borrow_mut();
+                Value::Channel(arc) => {
+                    let mut inner = arc.lock().unwrap();
                     if inner.closed {
                         return Err(ExecError::new("CHAN_RECV: channel is closed"));
                     }
@@ -484,8 +501,8 @@ fn exec_step(
         Instruction::ChanRecvMaybe { dst, chan_reg } => {
             let chan = frame.clone_reg(*chan_reg)?;
             let val = match &chan {
-                Value::Channel(rc) => {
-                    let mut inner = rc.borrow_mut();
+                Value::Channel(arc) => {
+                    let mut inner = arc.lock().unwrap();
                     match inner.queue.pop_front() {
                         Some(v) => Value::Variant {
                             name: "Some".to_string(),
@@ -507,8 +524,8 @@ fn exec_step(
         Instruction::ChanClose { chan_reg } => {
             let chan = frame.clone_reg(*chan_reg)?;
             match chan {
-                Value::Channel(rc) => {
-                    let mut inner = rc.borrow_mut();
+                Value::Channel(arc) => {
+                    let mut inner = arc.lock().unwrap();
                     if !inner.closeable {
                         return Err(ExecError::new("CHAN_CLOSE: channel was not created with Channel.newCloseable"));
                     }
@@ -526,8 +543,8 @@ fn exec_step(
             let mut selected = false;
             for arm in arms {
                 let chan = frame.clone_reg(arm.channel_reg)?;
-                if let Value::Channel(rc) = &chan
-                    && let Some(v) = rc.borrow_mut().queue.pop_front()
+                if let Value::Channel(arc) = &chan
+                    && let Some(v) = arc.lock().unwrap().queue.pop_front()
                 {
                     if arm.binding_reg != 0 {
                         frame.write(arm.binding_reg, v);
@@ -748,7 +765,7 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
 
 fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.fold: expected List")),
     };
     let fn_idx = module.fn_idx(fn_name)
@@ -763,7 +780,7 @@ fn exec_fold_user(module: &KelnModule, list: Value, init: Value, fn_name: &str) 
 
 fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.map: expected List")),
     };
     let fn_idx = module.fn_idx(fn_name)
@@ -772,12 +789,12 @@ fn exec_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Valu
     for item in items {
         result.push(execute(module, fn_idx, item)?);
     }
-    Ok(Value::List(Rc::new(result)))
+    Ok(Value::List(Arc::new(result)))
 }
 
 fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name: &str, stop_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let step_idx = module.fn_idx(step_name)
@@ -797,18 +814,18 @@ fn exec_fold_until_user(module: &KelnModule, list: Value, init: Value, step_name
 
 fn exec_filter_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.filter: expected List")),
     };
     let fn_idx = module.fn_idx(fn_name)
         .ok_or_else(|| ExecError::new(format!("List.filter: unknown fn '{}'", fn_name)))?;
     let mut result = Vec::new();
     for item in items {
-        if execute(module, fn_idx, item.clone())? == Value::Bool(true) {
+        if execute(module, fn_idx, item.clone() as Value)? == Value::Bool(true) {
             result.push(item);
         }
     }
-    Ok(Value::List(Rc::new(result)))
+    Ok(Value::List(Arc::new(result)))
 }
 
 // =============================================================================
@@ -908,7 +925,7 @@ fn exec_fold_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.fold: expected List")),
     };
     let mut acc = init;
@@ -927,7 +944,7 @@ fn exec_map_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.map: expected List")),
     };
     let mut result = Vec::with_capacity(items.len());
@@ -935,7 +952,7 @@ fn exec_map_closure(
         let merged = build_closure_call_arg(item, &captures);
         result.push(execute(module, fn_idx, merged)?);
     }
-    Ok(Value::List(Rc::new(result)))
+    Ok(Value::List(Arc::new(result)))
 }
 
 fn exec_filter_closure(
@@ -945,17 +962,17 @@ fn exec_filter_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.filter: expected List")),
     };
     let mut result = Vec::new();
     for item in items {
-        let merged = build_closure_call_arg(item.clone(), &captures);
+        let merged = build_closure_call_arg(item.clone() as Value, &captures);
         if execute(module, fn_idx, merged)? == Value::Bool(true) {
             result.push(item);
         }
     }
-    Ok(Value::List(Rc::new(result)))
+    Ok(Value::List(Arc::new(result)))
 }
 
 fn exec_fold_until_closure(
@@ -968,7 +985,7 @@ fn exec_fold_until_closure(
     stop_captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let mut acc = init;
@@ -993,7 +1010,7 @@ fn exec_fold_until_mixed(
     stop_captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let step_idx = module.fn_idx(step_name)
@@ -1019,7 +1036,7 @@ fn exec_fold_until_mixed_rev(
     stop_name: &str,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.foldUntil: expected List")),
     };
     let stop_idx = module.fn_idx(stop_name)
@@ -1059,7 +1076,7 @@ fn exec_map_fold_user(
 
 fn exec_find_map_user(module: &KelnModule, list: Value, fn_name: &str) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.findMap: expected List")),
     };
     let fn_idx = module.fn_idx(fn_name)
@@ -1080,7 +1097,7 @@ fn exec_find_map_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.findMap: expected List")),
     };
     for item in items {
@@ -1114,7 +1131,7 @@ fn exec_list_map_fold_user(
     fn_name: &str,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.mapFold: expected List")),
     };
     let fn_idx = module.fn_idx(fn_name)
@@ -1128,7 +1145,7 @@ fn exec_list_map_fold_user(
         acc = new_acc;
         out.push(out_val);
     }
-    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
+    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Arc::new(out))]))
 }
 
 fn exec_list_map_fold_closure(
@@ -1139,7 +1156,7 @@ fn exec_list_map_fold_closure(
     captures: Vec<(String, Value)>,
 ) -> Result<Value, ExecError> {
     let items = match list {
-        Value::List(v) => Rc::unwrap_or_clone(v),
+        Value::List(v) => Arc::unwrap_or_clone(v),
         _ => return Err(ExecError::new("List.mapFold: expected List")),
     };
     let mut acc = init;
@@ -1152,7 +1169,7 @@ fn exec_list_map_fold_closure(
         acc = new_acc;
         out.push(out_val);
     }
-    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
+    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Arc::new(out))]))
 }
 
 #[allow(clippy::mutable_key_type)]

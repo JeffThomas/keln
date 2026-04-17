@@ -274,18 +274,18 @@ fn productList {
 
     #[test]
     fn test_sum_list() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", xs), Ok(Value::Int(10)));
     }
 
     #[test]
     fn test_sum_list_empty() {
-        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", Value::List(std::rc::Rc::new(vec![]))), Ok(Value::Int(0)));
+        assert_eq!(eval_fn(LIST_FOLD_SRC, "sumList", Value::List(std::sync::Arc::new(vec![]))), Ok(Value::Int(0)));
     }
 
     #[test]
     fn test_product_list() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(3), Value::Int(4)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(eval_fn(LIST_FOLD_SRC, "productList", xs), Ok(Value::Int(24)));
     }
 
@@ -389,20 +389,20 @@ fn firstPositiveOr {
 
     #[test]
     fn test_first_positive_found() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0), Value::Int(5)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(0), Value::Int(0), Value::Int(5)]));
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(some(Value::Int(5))));
     }
 
     #[test]
     fn test_first_positive_none() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(0), Value::Int(0)]));
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositive", xs), Ok(none()));
     }
 
     #[test]
     fn test_first_positive_or_default() {
         let input = rec(vec![
-            ("xs", Value::List(std::rc::Rc::new(vec![Value::Int(0)]))),
+            ("xs", Value::List(std::sync::Arc::new(vec![Value::Int(0)]))),
             ("default", Value::Int(42)),
         ]);
         assert_eq!(eval_fn(MAYBE_SRC, "firstPositiveOr", input), Ok(Value::Int(42)));
@@ -440,12 +440,12 @@ fn countAll {
     #[test]
     fn test_frequency_counter() {
         let src = MAP_SRC;
-        let items = Value::List(std::rc::Rc::new(vec![
+        let items = Value::List(std::sync::Arc::new(vec![
             Value::Str("a".into()), Value::Str("b".into()),
             Value::Str("a".into()), Value::Str("c".into()),
             Value::Str("a".into()),
         ]));
-        let input = rec(vec![("counts", Value::Map(std::rc::Rc::new(std::collections::BTreeMap::new()))), ("items", items)]);
+        let input = rec(vec![("counts", Value::Map(std::sync::Arc::new(std::collections::BTreeMap::new()))), ("items", items)]);
         let result = eval_fn(src, "countAll", input).unwrap();
         if let Value::Map(entries) = &result {
             let get = |k: &str| entries.get(&Value::Str(k.into())).cloned();
@@ -502,12 +502,12 @@ fn appendToClone {
     #[test]
     fn test_clone_list() {
         let input = rec(vec![
-            ("xs", Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2)]))),
+            ("xs", Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2)]))),
             ("item", Value::Int(3)),
         ]);
         assert_eq!(
             eval_fn(CLONE_SRC, "appendToClone", input),
-            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])))
+            Ok(Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])))
         );
     }
 
@@ -546,10 +546,10 @@ fn classifyList {
 
     #[test]
     fn test_classify_list() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
         assert_eq!(
             eval_fn(MULTI_FN_SRC, "classifyList", xs),
-            Ok(Value::List(std::rc::Rc::new(vec![
+            Ok(Value::List(std::sync::Arc::new(vec![
                 Value::Str("odd".into()), Value::Str("even".into()),
                 Value::Str("odd".into()), Value::Str("even".into()),
             ])))
@@ -778,7 +778,7 @@ fn sum_with_offset {
     #[test]
     fn test_capturing_helper_basic() {
         let arg = Value::make_record(&["items", "offset"], vec![
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
             Value::Int(10),
         ]);
         assert_eq!(
@@ -806,7 +806,7 @@ fn count_above {
     #[test]
     fn test_capturing_helper_with_match() {
         let arg = Value::make_record(&["items", "cutoff"], vec![
-            Value::List(std::rc::Rc::new(vec![
+            Value::List(std::sync::Arc::new(vec![
                 Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(8), Value::Int(2),
             ])),
             Value::Int(3),
@@ -946,7 +946,7 @@ fn with_in_fold {
     #[test]
     fn test_record_with_in_fold() {
         let arg = Value::make_record(&["items"], vec![
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         ]);
         assert_eq!(eval_fn(RECORD_WITH_SRC, "with_in_fold", arg), Ok(Value::Int(6)));
     }
@@ -986,7 +986,7 @@ fn findAboveLimit {
 
     #[test]
     fn test_find_map_finds_first() {
-        let xs = Value::List(std::rc::Rc::new(vec![
+        let xs = Value::List(std::sync::Arc::new(vec![
             Value::Int(1), Value::Int(3), Value::Int(4), Value::Int(6),
         ]));
         assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(some(Value::Int(8))));
@@ -994,13 +994,13 @@ fn findAboveLimit {
 
     #[test]
     fn test_find_map_returns_none() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
         assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(none()));
     }
 
     #[test]
     fn test_find_map_empty_list() {
-        let xs = Value::List(std::rc::Rc::new(vec![]));
+        let xs = Value::List(std::sync::Arc::new(vec![]));
         assert_eq!(eval_fn(FIND_MAP_SRC, "doubleFirstEven", xs), Ok(none()));
     }
 
@@ -1008,7 +1008,7 @@ fn findAboveLimit {
     fn test_find_map_closure_captures_context() {
         let input = Value::make_record(&["limit", "xs"], vec![
             Value::Int(10),
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(5), Value::Int(12), Value::Int(20)])),
+            Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(5), Value::Int(12), Value::Int(20)])),
         ]);
         assert_eq!(eval_fn(FIND_MAP_SRC, "findAboveLimit", input), Ok(some(Value::Int(12))));
     }
@@ -1051,7 +1051,7 @@ fn sumMapFull {
         map.insert(Value::Str("c".into()), Value::Int(7));
         map.insert(Value::Str("d".into()), Value::Int(9));
         let input = Value::make_record(&["m", "limit"], vec![
-            Value::Map(std::rc::Rc::new(map)),
+            Value::Map(std::sync::Arc::new(map)),
             Value::Int(10),
         ]);
         // a=3, b=5 → 8 (continue), c=7 → 15 > 10 (stop)
@@ -1065,7 +1065,7 @@ fn sumMapFull {
         map.insert(Value::Str("b".into()), Value::Int(5));
         map.insert(Value::Str("c".into()), Value::Int(7));
         assert_eq!(
-            eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapFull", Value::Map(std::rc::Rc::new(map))),
+            eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapFull", Value::Map(std::sync::Arc::new(map))),
             Ok(Value::Int(15))
         );
     }
@@ -1074,7 +1074,7 @@ fn sumMapFull {
     fn test_map_fold_until_empty_map() {
         let map = std::collections::BTreeMap::new();
         let input = Value::make_record(&["m", "limit"], vec![
-            Value::Map(std::rc::Rc::new(map)),
+            Value::Map(std::sync::Arc::new(map)),
             Value::Int(0),
         ]);
         assert_eq!(eval_fn(MAP_FOLD_UNTIL_SRC, "sumMapUntil", input), Ok(Value::Int(0)));
@@ -1120,10 +1120,10 @@ fn finalAcc {
 
     #[test]
     fn test_map_fold_prefix_sums() {
-        let xs = Value::List(std::rc::Rc::new(vec![
+        let xs = Value::List(std::sync::Arc::new(vec![
             Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4),
         ]));
-        let expected = Value::List(std::rc::Rc::new(vec![
+        let expected = Value::List(std::sync::Arc::new(vec![
             Value::Int(1), Value::Int(3), Value::Int(6), Value::Int(10),
         ]));
         assert_eq!(eval_fn(MAP_FOLD_SRC, "prefixSums", xs), Ok(expected));
@@ -1131,20 +1131,20 @@ fn finalAcc {
 
     #[test]
     fn test_map_fold_empty() {
-        let xs = Value::List(std::rc::Rc::new(vec![]));
-        let expected = Value::List(std::rc::Rc::new(vec![]));
+        let xs = Value::List(std::sync::Arc::new(vec![]));
+        let expected = Value::List(std::sync::Arc::new(vec![]));
         assert_eq!(eval_fn(MAP_FOLD_SRC, "prefixSums", xs), Ok(expected));
     }
 
     #[test]
     fn test_map_fold_final_acc() {
-        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(10), Value::Int(20), Value::Int(30)]));
+        let xs = Value::List(std::sync::Arc::new(vec![Value::Int(10), Value::Int(20), Value::Int(30)]));
         assert_eq!(eval_fn(MAP_FOLD_SRC, "finalAcc", xs), Ok(Value::Int(60)));
     }
 
     #[test]
     fn test_map_fold_enumerate() {
-        let xs = Value::List(std::rc::Rc::new(vec![
+        let xs = Value::List(std::sync::Arc::new(vec![
             Value::Str("a".into()), Value::Str("b".into()),
         ]));
         let result = eval_fn(MAP_FOLD_SRC, "enumerate", xs).unwrap();

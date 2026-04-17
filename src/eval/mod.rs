@@ -8,10 +8,9 @@ mod tests;
 #[cfg(test)]
 mod integration_tests;
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 // =============================================================================
 // ChannelInner — backing store for Value::Channel
@@ -52,7 +51,7 @@ pub enum Value {
     Str(String),
     Bytes(Vec<u8>),
     Unit,
-    List(Rc<Vec<Value>>),
+    List(Arc<Vec<Value>>),
     /// Product type or anonymous record: layout index into global interner + positional values
     Record(u32, Vec<Value>),
     /// Sum type variant: Ok(5), None, Running { attempt: 1 }
@@ -61,18 +60,18 @@ pub enum Value {
     FnRef(String),
     /// Partially applied function via .with
     PartialFn { name: String, bound: Vec<(String, Value)> },
-    /// Synchronous channel (single-threaded; swap to Arc/Mutex for Tokio later)
-    Channel(Rc<RefCell<ChannelInner>>),
+    /// Concurrent channel backed by Arc<Mutex<ChannelInner>>
+    Channel(Arc<Mutex<ChannelInner>>),
     /// Duration in milliseconds
     Duration(i64),
     /// Unix timestamp in milliseconds
     Timestamp(i64),
-    /// Completed task result (sync model)
-    Task(Box<Value>),
-    /// Key-value map backed by BTreeMap for O(log n) operations; Rc for O(1) clone
-    Map(Rc<BTreeMap<Value, Value>>),
-    /// Unique set backed by BTreeSet for O(log n) operations; Rc for O(1) clone
-    Set(Rc<BTreeSet<Value>>),
+    /// Async task handle — wraps a background thread running a Keln function
+    Task(Arc<TaskHandle>),
+    /// Key-value map backed by BTreeMap for O(log n) operations; Arc for O(1) clone
+    Map(Arc<BTreeMap<Value, Value>>),
+    /// Unique set backed by BTreeSet for O(log n) operations; Arc for O(1) clone
+    Set(Arc<BTreeSet<Value>>),
     /// Compile-time phantom type descriptor — runtime representation of TypeRef<T>.
     /// Value is the type name string (e.g. "JobMessage", "Int").
     TypeRef(String),
@@ -81,6 +80,24 @@ pub enum Value {
     /// VM closure produced by closure-lifting in the bytecode backend.
     /// Stores the lifted function index and a snapshot of captured variable values.
     VmClosure { fn_idx: usize, captures: Vec<(String, Value)> },
+}
+
+// Compile-time check: Value must be Send + Sync for cross-thread task spawning.
+const _: () = {
+    fn _assert_send_sync<T: Send + Sync>() {}
+    fn _check() {
+        _assert_send_sync::<Value>();
+        _assert_send_sync::<TaskHandle>();
+    }
+};
+
+/// Backing store for a running or completed Keln task.
+#[derive(Debug)]
+pub struct TaskHandle {
+    /// The result of the computation, set exactly once when the thread finishes.
+    pub result: OnceLock<Result<Value, String>>,
+    /// The OS thread running the computation (taken on the first await).
+    pub thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,9 +135,9 @@ impl PartialEq for Value {
             (Value::Unit, Value::Unit) => true,
             (Value::Duration(a), Value::Duration(b)) => a == b,
             (Value::Timestamp(a), Value::Timestamp(b)) => a == b,
-            (Value::Map(a), Value::Map(b)) => a == b,
-            (Value::Set(a), Value::Set(b)) => a == b,
-            (Value::List(a), Value::List(b)) => a == b,
+            (Value::Map(a), Value::Map(b)) => **a == **b,
+            (Value::Set(a), Value::Set(b)) => **a == **b,
+            (Value::List(a), Value::List(b)) => **a == **b,
             (Value::Record(la, a), Value::Record(lb, b)) => {
                 if la == lb {
                     a == b
@@ -209,7 +226,7 @@ impl Ord for Value {
             (Value::Bytes(a), Value::Bytes(b)) => a.cmp(b),
             (Value::Duration(a), Value::Duration(b)) => a.cmp(b),
             (Value::Timestamp(a), Value::Timestamp(b)) => a.cmp(b),
-            (Value::List(a), Value::List(b)) => a.cmp(b),
+            (Value::List(a), Value::List(b)) => a.as_slice().cmp(b.as_slice()),
             (Value::Record(la, a), Value::Record(lb, b)) => {
                 let names_a = fields_of_layout(*la);
                 let names_b = fields_of_layout(*lb);
@@ -227,12 +244,12 @@ impl Ord for Value {
             (Value::Variant { name: n1, payload: p1 }, Value::Variant { name: n2, payload: p2 }) => {
                 n1.cmp(n2).then_with(|| p1.cmp(p2))
             }
-            (Value::Map(a), Value::Map(b)) => a.cmp(b),
-            (Value::Set(a), Value::Set(b)) => a.cmp(b),
+            (Value::Map(a), Value::Map(b)) => a.iter().cmp(b.iter()),
+            (Value::Set(a), Value::Set(b)) => a.iter().cmp(b.iter()),
             (Value::FnRef(a), Value::FnRef(b)) => a.cmp(b),
             (Value::PartialFn { name: n1, .. }, Value::PartialFn { name: n2, .. }) => n1.cmp(n2),
             (Value::Channel(_), Value::Channel(_)) => Ordering::Equal,
-            (Value::Task(a), Value::Task(b)) => a.cmp(b),
+            (Value::Task(a), Value::Task(b)) => Arc::as_ptr(a).cast::<()>().cmp(&Arc::as_ptr(b).cast::<()>()),
             (Value::TypeRef(a), Value::TypeRef(b)) => a.cmp(b),
             (Value::Closure { id: a }, Value::Closure { id: b }) => a.cmp(b),
             (Value::VmClosure { fn_idx: a, .. }, Value::VmClosure { fn_idx: b, .. }) => a.cmp(b),
@@ -323,7 +340,11 @@ impl fmt::Display for Value {
             Value::Channel(_) => write!(f, "<channel>"),
             Value::Duration(ms) => write!(f, "<duration:{}ms>", ms),
             Value::Timestamp(ms) => write!(f, "<timestamp:{}>", ms),
-            Value::Task(v) => write!(f, "<task:{}>", v),
+            Value::Task(h) => match h.result.get() {
+                Some(Ok(v)) => write!(f, "<task:done:{}>", v),
+                Some(Err(e)) => write!(f, "<task:err:{}>", e),
+                None => write!(f, "<task:pending>"),
+            },
             Value::Map(map) => {
                 write!(f, "Map{{")?;
                 for (i, (k, v)) in map.iter().enumerate() {
@@ -392,8 +413,10 @@ pub(crate) enum Thunk {
 /// Parse and load a Keln source string, returning a ready-to-call Evaluator.
 pub fn load_source(source: &str) -> Result<Evaluator, String> {
     let program = crate::parser::parse(source).map_err(|e| format!("{}", e))?;
+    let program = Arc::new(program);
     let mut ev = Evaluator::new();
     ev.load_program(&program);
+    ev.program = Some(program);
     Ok(ev)
 }
 
@@ -437,22 +460,21 @@ impl RecordInterner {
     }
 }
 
-thread_local! {
-    static RECORD_INTERNER: RefCell<RecordInterner> = RefCell::new(RecordInterner::new());
-}
+static RECORD_INTERNER: std::sync::LazyLock<RwLock<RecordInterner>> =
+    std::sync::LazyLock::new(|| RwLock::new(RecordInterner::new()));
 
 /// Register a list of field names in canonical order, returning a stable layout index.
-/// The same field names in the same order always return the same index (thread-local).
+/// The same field names in the same order always return the same index (global).
 pub fn intern_layout(fields: &[String]) -> u32 {
-    RECORD_INTERNER.with(|r| r.borrow_mut().intern(fields))
+    RECORD_INTERNER.write().unwrap().intern(fields)
 }
 
 /// Look up field names for a layout index. Returns an empty vec for unknown indices.
 pub fn fields_of_layout(idx: u32) -> Vec<String> {
-    RECORD_INTERNER.with(|r| r.borrow().fields_of(idx).unwrap_or(&[]).to_vec())
+    RECORD_INTERNER.read().unwrap().fields_of(idx).unwrap_or(&[]).to_vec()
 }
 
 /// Find the positional index of a named field within a layout. Returns None if not found.
 pub fn field_pos(layout_idx: u32, name: &str) -> Option<usize> {
-    RECORD_INTERNER.with(|r| r.borrow().field_pos(layout_idx, name))
+    RECORD_INTERNER.read().unwrap().field_pos(layout_idx, name)
 }

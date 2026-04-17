@@ -256,11 +256,11 @@ fn doMap { Pure List<Int> -> List<Int>
     out: List.map(xs, double)
 }"#,
             "doMap",
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
         assert_eq!(
             result,
-            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])))
+            Ok(Value::List(std::sync::Arc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])))
         );
     }
 
@@ -276,7 +276,7 @@ fn doFilter { Pure List<Int> -> List<Int>
     out: List.filter(xs, isPositive)
 }"#,
             "doFilter",
-            Value::List(std::rc::Rc::new(vec![
+            Value::List(std::sync::Arc::new(vec![
                 Value::Int(-1),
                 Value::Int(2),
                 Value::Int(-3),
@@ -285,7 +285,7 @@ fn doFilter { Pure List<Int> -> List<Int>
         );
         assert_eq!(
             result,
-            Ok(Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(4)])))
+            Ok(Value::List(std::sync::Arc::new(vec![Value::Int(2), Value::Int(4)])))
         );
     }
 
@@ -297,7 +297,7 @@ fn doFilter { Pure List<Int> -> List<Int>
     out: List.len(xs)
 }"#,
             "count",
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
         assert_eq!(result, Ok(Value::Int(3)));
     }
@@ -626,7 +626,7 @@ fn runAll { IO Unit -> List<Int>
             "runAll",
             Value::Unit,
         );
-        assert_eq!(result, Ok(Value::List(std::rc::Rc::new(vec![Value::Int(11), Value::Int(12)]))));
+        assert_eq!(result, Ok(Value::List(std::sync::Arc::new(vec![Value::Int(11), Value::Int(12)]))));
     }
 
     // =========================================================================
@@ -1052,7 +1052,7 @@ fn addPair { Pure {acc: Int, item: Int} -> Int
             "makeList",
             Value::Unit,
         );
-        assert_eq!(result, Ok(Value::List(std::rc::Rc::new(vec![Value::Int(0), Value::Int(0), Value::Int(0)]))));
+        assert_eq!(result, Ok(Value::List(std::sync::Arc::new(vec![Value::Int(0), Value::Int(0), Value::Int(0)]))));
     }
 
     #[test]
@@ -1565,5 +1565,195 @@ fn raceTest { IO Unit -> Int
         ev.expr_depth = 0;
         let ok = ev.call_fn("id", Value::Int(7)).expect("should succeed after reset");
         assert_eq!(ok, Value::Int(7));
+    }
+
+    // =========================================================================
+    // Real parallel processing — Phase 4c
+    // =========================================================================
+
+    #[test]
+    fn test_parallel_tasks_return_independent_results() {
+        // Two tasks computing different values concurrently — both must return correct results.
+        let result = eval_fn(
+            r#"fn taskA { IO Unit -> Int
+    in: _
+    out: 100
+}
+fn taskB { IO Unit -> Int
+    in: _
+    out: 200
+}
+fn run { IO Unit -> List<Int>
+    in: _
+    out: do {
+        let ta = Task.spawn(taskA)
+        let tb = Task.spawn(taskB)
+        Task.awaitAll([ta, tb])
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![Value::Int(100), Value::Int(200)]))),
+        );
+    }
+
+    #[test]
+    fn test_parallel_tasks_run_concurrently() {
+        // Spawn N tasks that each do CPU work. Measure wall time.
+        // If truly parallel they finish in ~1 task-duration; serially they take N×.
+        // We use List.fold to sum 1..500_000 as the work unit (~few ms each).
+        // We spawn 4 tasks and assert wall time < 4× single task time.
+        use std::time::Instant;
+
+        let src = r#"fn sumTo { IO Unit -> Int
+    in: _
+    out: List.fold(List.range(1, 50000), 0, add)
+    helpers: {
+        add :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+fn run4 { IO Unit -> List<Int>
+    in: _
+    out: do {
+        let t0 = Task.spawn(sumTo)
+        let t1 = Task.spawn(sumTo)
+        let t2 = Task.spawn(sumTo)
+        let t3 = Task.spawn(sumTo)
+        Task.awaitAll([t0, t1, t2, t3])
+    }
+}"#;
+
+        // Time a single serial run for baseline.
+        let t0 = Instant::now();
+        let single = eval_fn(src, "sumTo", Value::Unit).expect("single run");
+        let single_ms = t0.elapsed().as_millis().max(1);
+
+        // Time 4 parallel tasks.
+        let tp = Instant::now();
+        let parallel = eval_fn(src, "run4", Value::Unit).expect("parallel run");
+        let parallel_ms = tp.elapsed().as_millis();
+
+        // All four results must equal the single result.
+        let expected = single.clone();
+        match parallel {
+            Value::List(items) => {
+                assert_eq!(items.len(), 4, "expected 4 results");
+                for item in items.iter() {
+                    assert_eq!(item, &expected, "each task result must match serial");
+                }
+            }
+            other => panic!("expected List, got {:?}", other),
+        }
+
+        // Parallel time should be well under 4× serial time.
+        // (Allow generous 3.5× headroom for CI / single-core environments.)
+        assert!(
+            parallel_ms < single_ms * 4,
+            "parallel ({} ms) should be < 4× serial ({} ms)",
+            parallel_ms,
+            single_ms * 4,
+        );
+    }
+
+    #[test]
+    fn test_parallel_awaitall_preserves_order() {
+        // awaitAll must return results in spawn order, not completion order.
+        let result = eval_fn(
+            r#"fn v1 { IO Unit -> Int
+    in: _
+    out: 1
+}
+fn v2 { IO Unit -> Int
+    in: _
+    out: 2
+}
+fn v3 { IO Unit -> Int
+    in: _
+    out: 3
+}
+fn run { IO Unit -> List<Int>
+    in: _
+    out: do {
+        let t1 = Task.spawn(v1)
+        let t2 = Task.spawn(v2)
+        let t3 = Task.spawn(v3)
+        Task.awaitAll([t1, t2, t3])
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![
+                Value::Int(1), Value::Int(2), Value::Int(3),
+            ]))),
+        );
+    }
+
+    #[test]
+    fn test_parallel_task_awaitfirst() {
+        // awaitFirst returns the result of the first task in the list.
+        let result = eval_fn(
+            r#"fn fast { IO Unit -> Int
+    in: _
+    out: 99
+}
+fn slow { IO Unit -> Int
+    in: _
+    out: 1
+}
+fn run { IO Unit -> Int
+    in: _
+    out: do {
+        let tf = Task.spawn(fast)
+        let ts = Task.spawn(slow)
+        Task.awaitFirst([tf, ts])
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(99)));
+    }
+
+    #[test]
+    fn test_parallel_fan_out_reduce() {
+        // Fan-out: split list into N chunks, sum each in parallel, reduce sums.
+        // sum(1..=100) = 5050
+        let result = eval_fn(
+            r#"fn sumChunk { IO { xs: List<Int> } -> Int
+    in: args
+    out: List.fold(args.xs, 0, add)
+    helpers: {
+        add :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+fn run { IO Unit -> Int
+    in: _
+    out: do {
+        let all = List.range(1, 101)
+        let chunk1 = List.take(all, 25)
+        let chunk2 = List.take(List.drop(all, 25), 25)
+        let chunk3 = List.take(List.drop(all, 50), 25)
+        let chunk4 = List.drop(all, 75)
+        let t1 = Task.spawn(sumChunk.with({xs: chunk1}))
+        let t2 = Task.spawn(sumChunk.with({xs: chunk2}))
+        let t3 = Task.spawn(sumChunk.with({xs: chunk3}))
+        let t4 = Task.spawn(sumChunk.with({xs: chunk4}))
+        let results = Task.awaitAll([t1, t2, t3, t4])
+        List.fold(results, 0, addInt)
+    }
+    helpers: {
+        addInt :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(5050)));
     }
 }

@@ -50,7 +50,7 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
         Value::Duration(ms) => json!({ "$duration_ms": ms }),
         Value::Timestamp(ms) => json!({ "$timestamp_ms": ms }),
         Value::Channel(_) => json!({ "$channel": true }),
-        Value::Task(inner) => json!({ "$task": keln_value_to_json(inner) }),
+        Value::Task(_) => json!({ "$task": "<pending>" }),
         Value::Map(map) => {
             let entries: Vec<JValue> = map
                 .iter()
@@ -87,7 +87,7 @@ pub fn json_to_keln_value(j: JValue) -> Value {
         }
         JValue::String(s) => Value::Str(s),
         JValue::Array(arr) => {
-            Value::List(std::rc::Rc::new(arr.into_iter().map(json_to_keln_value).collect()))
+            Value::List(std::sync::Arc::new(arr.into_iter().map(json_to_keln_value).collect()))
         }
         JValue::Object(map) => {
             if let Some(tag) = map.get("$tag") {

@@ -1,0 +1,89 @@
+-- parallel_sum.keln
+-- Fan-out parallel sum: split [0, n) into 4 chunks, sum each chunk in a
+-- separate OS thread, then reduce the partial sums.
+--
+-- sum(0..n) = n*(n-1)/2
+--
+-- PERFORMANCE NOTE:
+-- Task.spawn carries real OS-thread overhead (~0.1-1ms per spawn). For pure
+-- arithmetic on in-memory lists the serial version is typically faster because
+-- thread creation takes longer than the computation itself, and List.range
+-- still allocates O(n) boxed integers per chunk regardless.
+-- Parallel speedup appears when each task does >= ~10ms of work: IO calls,
+-- heavy CPU algorithms, large search spaces, etc.
+-- This sample demonstrates correctness and the fan-out pattern.
+--
+-- Usage:
+--   keln run samples/parallel_sum.keln --fn parallelSum --arg 1000000
+--   keln run samples/parallel_sum.keln --fn serialSum   --arg 1000000
+--   keln verify samples/parallel_sum.keln
+
+-- Sum the exclusive range [lo, hi). Called in worker threads.
+fn sumChunk {
+    IO { lo: Int, hi: Int } -> Int
+
+    in: args
+    out: List.fold(List.range(args.lo, args.hi), 0, add)
+
+    confidence: 1.0
+    reason: "sum of exclusive integer range [lo, hi)"
+
+    helpers: {
+        add :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+
+-- Split [0, n) into 4 equal-ish chunks, sum each chunk on a separate OS
+-- thread, then fold the four partial sums together.
+fn parallelSum {
+    IO Int -> Int
+
+    in: n
+    out: do {
+        let q  = n / 4
+        let t0 = Task.spawn(sumChunk.with({lo: 0,         hi: q}))
+        let t1 = Task.spawn(sumChunk.with({lo: q,         hi: q * 2}))
+        let t2 = Task.spawn(sumChunk.with({lo: q * 2,     hi: q * 3}))
+        let t3 = Task.spawn(sumChunk.with({lo: q * 3,     hi: n}))
+        let parts = Task.awaitAll([t0, t1, t2, t3])
+        List.fold(parts, 0, reduce)
+    }
+
+    confidence: auto
+    reason: "4-way parallel fan-out; partial sums reduced serially after join"
+
+    verify: {
+        given(0)   -> 0
+        given(4)   -> 6
+        given(8)   -> 28
+        given(100) -> 4950
+    }
+
+    helpers: {
+        reduce :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}
+
+-- Serial reference implementation for comparison.
+fn serialSum {
+    Pure Int -> Int
+
+    in: n
+    out: List.fold(List.range(0, n), 0, add)
+
+    confidence: 1.0
+    reason: "serial sum of [0, n); reference for correctness"
+
+    verify: {
+        given(0)   -> 0
+        given(4)   -> 6
+        given(8)   -> 28
+        given(100) -> 4950
+
+        forall(n: Int where 1..50) -> serialSum(n) == (n * (n - 1)) / 2
+    }
+
+    helpers: {
+        add :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item
+    }
+}

@@ -228,59 +228,53 @@ fn decrementAt {
     reason: "decrement element at given index; leave all other counts unchanged"
 }
 
-fn updateAt {
-    Pure { lst: List<Int>, idx: Int, val: Int } -> List<Int>
-    in: args
+fn firstEmptyCell {
+    Pure { board: Set<Int>, w: Int, h: Int } -> Int
+    in: ctx
     out:
-        let indexed = List.zip(args.lst, List.range(0, List.len(args.lst))) in
-        List.map(indexed,
-            let upd :: Pure { fst: Int, snd: Int } -> Int =>
-                match it.snd == args.idx {
-                    true  -> args.val
-                    false -> it.fst
-                }
-            in upd)
+        let total = ctx.w * ctx.h in
+        let tryCell :: Pure Int -> Maybe<Int> =>
+            match Set.contains(ctx.board, it) {
+                true  -> Maybe.none(Unit)
+                false -> Maybe.some(it)
+            }
+        in
+        Maybe.getOr(List.findMap(List.range(0, total), tryCell), total)
     confidence: 1.0
-    reason: "set element at index to given value; leave all other elements unchanged"
+    reason: "scan left-to-right for first unoccupied cell index; return w*h if board is full"
 }
 
-fn genPlacementsForType {
+fn genPlacementsForCell {
     Pure {
         board:    Set<Int>,
         w:        Int,
         h:        Int,
         typeOrts: List<List<{dr: Int, dc: Int}>>,
         typeIdx:  Int,
-        minPos:   Int,
+        target:   Int,
         counts:   List<Int>,
-        prevPos:  List<Int>,
         total:    Int
-    } -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int }>
+    } -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newTotal: Int }>
     in: ctx
     out:
-        let positions = List.drop(List.range(0, ctx.w * ctx.h), ctx.minPos) in
         List.flatten(List.map(ctx.typeOrts,
-            let perOrient :: Pure List<{dr: Int, dc: Int}> -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int }> =>
+            let perOrient :: Pure List<{dr: Int, dc: Int}> -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newTotal: Int }> =>
                 let orient = it in
-                let anchor = Maybe.getOr(List.head(orient), { dr: 0, dc: 0 }) in
-                let valids = List.filter(positions,
-                    let isValidPos :: Pure Int -> Bool =>
-                        let pr = it / ctx.w - anchor.dr in
-                        let pc = it % ctx.w - anchor.dc in
-                        canPlaceAt({ board: ctx.board, w: ctx.w, h: ctx.h, orient: orient, pr: pr, pc: pc })
-                    in isValidPos) in
-                List.map(valids,
-                    let mkResult :: Pure Int -> { newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int } =>
-                        let pr = it / ctx.w - anchor.dr in
-                        let pc = it % ctx.w - anchor.dc in
-                        { newBoard:   placeOnBoard({ board: ctx.board, orient: orient, pr: pr, pc: pc, w: ctx.w }),
-                          newCounts:  decrementAt({ counts: ctx.counts, idx: ctx.typeIdx }),
-                          newPrevPos: updateAt({ lst: ctx.prevPos, idx: ctx.typeIdx, val: it }),
-                          newTotal:   ctx.total - 1 }
-                    in mkResult)
+                List.flatten(List.map(orient,
+                    let perCell :: Pure {dr: Int, dc: Int} -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newTotal: Int }> =>
+                        let pr = ctx.target / ctx.w - it.dr in
+                        let pc = ctx.target % ctx.w - it.dc in
+                        match canPlaceAt({ board: ctx.board, w: ctx.w, h: ctx.h, orient: orient, pr: pr, pc: pc }) {
+                            false -> []
+                            true  ->
+                                [{ newBoard:  placeOnBoard({ board: ctx.board, orient: orient, pr: pr, pc: pc, w: ctx.w }),
+                                   newCounts: decrementAt({ counts: ctx.counts, idx: ctx.typeIdx }),
+                                   newTotal:  ctx.total - 1 }]
+                        }
+                    in perCell))
             in perOrient))
     confidence: auto
-    reason: "for type typeIdx, enumerate all placements with anchor position >= minPos (symmetry breaking)"
+    reason: "for type typeIdx, try all (orientation, cell) pairs that cover target; return valid new board states"
 }
 
 fn canFit {
@@ -290,7 +284,6 @@ fn canFit {
         h:       Int,
         orients: List<List<List<{dr: Int, dc: Int}>>>,
         counts:  List<Int>,
-        prevPos: List<Int>,
         total:   Int
     } -> Bool
     in: state
@@ -298,7 +291,7 @@ fn canFit {
         match state.total == 0 {
             true  -> true
             false ->
-                let freeCells   = state.w * state.h - Set.size(state.board) in
+                let freeCells  = state.w * state.h - Set.size(state.board) in
                 let getArea :: Pure List<List<{dr: Int, dc: Int}>> -> Int =>
                     List.len(Maybe.getOr(List.head(it), []))
                 in
@@ -311,32 +304,25 @@ fn canFit {
                 match remainArea > freeCells {
                     true  -> false
                     false ->
-                        let findType :: Pure { acc: Int, item: { fst: Int, snd: Int } } -> Int =>
-                            match it.acc == -1 {
-                                true  ->
-                                    match it.item.fst > 0 {
-                                        true  -> it.item.snd
-                                        false -> -1
-                                    }
-                                false -> it.acc
-                            }
+                        let target       = firstEmptyCell({ board: state.board, w: state.w, h: state.h }) in
+                        let typesWithIdx = List.zip(state.orients,
+                                             List.zip(state.counts,
+                                                 List.range(0, List.len(state.counts)))) in
+                        let isActive :: Pure { fst: List<List<{dr: Int, dc: Int}>>, snd: { fst: Int, snd: Int } } -> Bool =>
+                            it.snd.fst > 0
                         in
-                        let notNeg :: Pure Int -> Bool => Bool.not(it == -1) in
-                        let firstType = List.foldUntil(
-                            List.zip(state.counts, List.range(0, List.len(state.counts))),
-                            -1, findType, notNeg) in
-                        let typeOrts = Maybe.getOr(List.head(List.drop(state.orients, firstType)), []) in
-                        let minPos   = Maybe.getOr(List.head(List.drop(state.prevPos,  firstType)), 0) in
-                        let placements = genPlacementsForType({
-                            board:    state.board,    w:        state.w,
-                            h:        state.h,        typeOrts: typeOrts,
-                            typeIdx:  firstType,      minPos:   minPos,
-                            counts:   state.counts,   prevPos:  state.prevPos,
-                            total:    state.total }) in
-                        let tryOne :: Pure { acc: Bool, item: { newBoard: Set<Int>, newCounts: List<Int>, newPrevPos: List<Int>, newTotal: Int } } -> Bool =>
+                        let forType :: Pure { fst: List<List<{dr: Int, dc: Int}>>, snd: { fst: Int, snd: Int } } -> List<{ newBoard: Set<Int>, newCounts: List<Int>, newTotal: Int }> =>
+                            genPlacementsForCell({
+                                board:    state.board,  w:        state.w,
+                                h:        state.h,      typeOrts: it.fst,
+                                typeIdx:  it.snd.snd,   target:   target,
+                                counts:   state.counts, total:    state.total })
+                        in
+                        let placements  = List.flatten(List.map(List.filter(typesWithIdx, isActive), forType)) in
+                        let tryOne :: Pure { acc: Bool, item: { newBoard: Set<Int>, newCounts: List<Int>, newTotal: Int } } -> Bool =>
                             match it.acc {
                                 true  -> true
-                                false -> canFit({ board: it.item.newBoard, w: state.w, h: state.h, orients: state.orients, counts: it.item.newCounts, prevPos: it.item.newPrevPos, total: it.item.newTotal })
+                                false -> canFit({ board: it.item.newBoard, w: state.w, h: state.h, orients: state.orients, counts: it.item.newCounts, total: it.item.newTotal })
                             }
                         in
                         let stopWhenDone :: Pure Bool -> Bool => it in
@@ -344,7 +330,7 @@ fn canFit {
                 }
         }
     confidence: auto
-    reason: "piece-first backtracking: pick first type with count>0, try all placements with symmetry breaking; area pruning"
+    reason: "first-empty-cell backtracking: always cover the leftmost free cell; O(orientations*pieceSize) branches per level vs O(w*h)"
 }
 
 fn solve {
@@ -362,11 +348,9 @@ fn solve {
         let allOrts  = List.map(shapes, computeOrients) in
         let regions  = List.map(regLines, parseRegion) in
         let sumFn  :: Pure { acc: Int, item: Int } -> Int => it.acc + it.item in
-        let zeroFn :: Pure Int -> Int => 0 in
-        let initPrev = List.map(List.range(0, numShapes), zeroFn) in
         let countFit :: Pure { acc: Int, item: { w: Int, h: Int, counts: List<Int> } } -> Int =>
             let tot  = List.fold(it.item.counts, 0, sumFn) in
-            let fits = canFit({ board: Set.empty, w: it.item.w, h: it.item.h, orients: allOrts, counts: it.item.counts, prevPos: initPrev, total: tot }) in
+            let fits = canFit({ board: Set.empty, w: it.item.w, h: it.item.h, orients: allOrts, counts: it.item.counts, total: tot }) in
             match fits {
                 true  -> it.acc + 1
                 false -> it.acc

@@ -294,7 +294,8 @@ fn cmd_run_bc(path: &str, func_override: Option<&str>, arg_json: Option<&str>) {
         },
     };
 
-    match keln::vm::exec::execute_fn(&module, &fn_name, arg) {
+    let module = std::sync::Arc::new(module);
+    match keln::vm::exec::execute_fn_arc(module, &fn_name, arg) {
         Ok(v) => {
             let j = value_to_json(&v);
             println!("{}", serde_json::to_string_pretty(&j).unwrap());

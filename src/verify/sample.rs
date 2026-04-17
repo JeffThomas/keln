@@ -170,11 +170,11 @@ fn sample_generic(name: &str, args: &[TypeExpr]) -> Vec<Value> {
                 .first()
                 .map(|t| sample_for_type(t, None))
                 .unwrap_or_default();
-            let mut v = vec![Value::List(std::rc::Rc::new(vec![]))];
+            let mut v = vec![Value::List(std::sync::Arc::new(vec![]))];
             if !inner.is_empty() {
-                v.push(Value::List(std::rc::Rc::new(vec![inner[0].clone()])));
+                v.push(Value::List(std::sync::Arc::new(vec![inner[0].clone()])));
                 if inner.len() > 1 {
-                    v.push(Value::List(std::rc::Rc::new(inner[..2].to_vec())));
+                    v.push(Value::List(std::sync::Arc::new(inner[..2].to_vec())));
                 }
             }
             v

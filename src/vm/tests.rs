@@ -581,8 +581,7 @@ fn test_channel_close_recv_after_close_returns_none() {
     // We pre-close the channel in Rust rather than calling Channel.close inside
     // the function body, because `Channel.close(ch)\n<-ch` in a do-block is parsed
     // as `Channel.close(ch) <- ch` (a send) due to operator precedence.
-    use std::rc::Rc;
-    use std::cell::RefCell;
+    use std::sync::{Arc, Mutex};
     use crate::eval::{ChannelInner, VariantPayload};
 
     let src = r#"fn recvFromClosed {
@@ -592,7 +591,7 @@ fn test_channel_close_recv_after_close_returns_none() {
 }"#;
     let mut inner = ChannelInner::new_closeable();
     inner.closed = true;
-    let ch = Value::Channel(Rc::new(RefCell::new(inner.clone())));
+    let ch = Value::Channel(Arc::new(Mutex::new(inner.clone())));
     let expected = Value::Variant { name: "None".to_string(), payload: VariantPayload::Unit };
 
     // Tree-walker
@@ -601,7 +600,7 @@ fn test_channel_close_recv_after_close_returns_none() {
 
     // Bytecode VM — ChanRecvMaybe is now emitted by the lowering pass for
     // Closeable<Channel<T>> parameters, so this path is exercised correctly.
-    let ch2 = Value::Channel(Rc::new(RefCell::new(inner)));
+    let ch2 = Value::Channel(Arc::new(Mutex::new(inner)));
     let bc = run(src, "recvFromClosed", ch2);
     assert_eq!(bc, expected, "bytecode VM");
 }
@@ -798,7 +797,7 @@ fn offset_fold {
 }
 "#;
     let arg = Value::make_record(&["list", "offset"], vec![
-        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         Value::Int(10),
     ]);
     assert_both_backends(src, "offset_fold", arg, Value::Int(36));
@@ -817,7 +816,7 @@ fn plain_sum {
     reason: "closure with no captures"
 }
 "#;
-    let arg = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
+    let arg = Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]));
     assert_both_backends(src, "plain_sum", arg, Value::Int(10));
 }
 
@@ -835,11 +834,11 @@ fn multiply_all {
 }
 "#;
     let arg = Value::make_record(&["list", "factor"], vec![
-        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         Value::Int(5),
     ]);
     assert_both_backends(src, "multiply_all", arg,
-        Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)])));
+        Value::List(std::sync::Arc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)])));
 }
 
 #[test]
@@ -856,13 +855,13 @@ fn filter_above {
 }
 "#;
     let arg = Value::make_record(&["list", "min_val"], vec![
-        Value::List(std::rc::Rc::new(vec![
+        Value::List(std::sync::Arc::new(vec![
             Value::Int(1), Value::Int(5), Value::Int(3), Value::Int(7), Value::Int(2),
         ])),
         Value::Int(3),
     ]);
     assert_both_backends(src, "filter_above", arg,
-        Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(7)])));
+        Value::List(std::sync::Arc::new(vec![Value::Int(5), Value::Int(7)])));
 }
 
 #[test]
@@ -882,7 +881,7 @@ fn weighted_sum {
 "#;
     // step: 0+(1*2+5)=7 → 7+(2*2+5)=16 → 16+(3*2+5)=27
     let arg = Value::make_record(&["list", "base", "weight"], vec![
-        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         Value::Int(5),
         Value::Int(2),
     ]);
@@ -909,7 +908,7 @@ fn doubleFirstEven {
     }
 }
 "#;
-    let xs = Value::List(std::rc::Rc::new(vec![
+    let xs = Value::List(std::sync::Arc::new(vec![
         Value::Int(1), Value::Int(3), Value::Int(4), Value::Int(6),
     ]));
     let expected = Value::Variant {
@@ -935,7 +934,7 @@ fn doubleFirstEven {
     }
 }
 "#;
-    let xs = Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
+    let xs = Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(3), Value::Int(5)]));
     let expected = Value::Variant {
         name: "None".to_string(),
         payload: crate::eval::VariantPayload::Unit,
@@ -962,7 +961,7 @@ fn findAbove {
 "#;
     let input = Value::make_record(&["limit", "xs"], vec![
         Value::Int(10),
-        Value::List(std::rc::Rc::new(vec![
+        Value::List(std::sync::Arc::new(vec![
             Value::Int(1), Value::Int(5), Value::Int(12), Value::Int(20),
         ])),
     ]);
@@ -998,7 +997,7 @@ fn sumUntil {
     map.insert(Value::Str("c".into()), Value::Int(7));
     map.insert(Value::Str("d".into()), Value::Int(9));
     // BTreeMap iterates alphabetically: a=3 (acc=3), b=5 (acc=8), c=7 (acc=15 > 10 → stop)
-    assert_both_backends(src, "sumUntil", Value::Map(std::rc::Rc::new(map)), Value::Int(15));
+    assert_both_backends(src, "sumUntil", Value::Map(std::sync::Arc::new(map)), Value::Int(15));
 }
 
 #[test]
@@ -1020,7 +1019,7 @@ fn sumAll {
     map.insert(Value::Str("x".into()), Value::Int(10));
     map.insert(Value::Str("y".into()), Value::Int(20));
     map.insert(Value::Str("z".into()), Value::Int(30));
-    assert_both_backends(src, "sumAll", Value::Map(std::rc::Rc::new(map)), Value::Int(60));
+    assert_both_backends(src, "sumAll", Value::Map(std::sync::Arc::new(map)), Value::Int(60));
 }
 
 // =============================================================================
@@ -1041,10 +1040,10 @@ fn prefixSums {
     }
 }
 "#;
-    let xs = Value::List(std::rc::Rc::new(vec![
+    let xs = Value::List(std::sync::Arc::new(vec![
         Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4),
     ]));
-    let expected = Value::List(std::rc::Rc::new(vec![
+    let expected = Value::List(std::sync::Arc::new(vec![
         Value::Int(1), Value::Int(3), Value::Int(6), Value::Int(10),
     ]));
     assert_both_backends(src, "prefixSums", xs, expected);
@@ -1069,9 +1068,9 @@ fn scaledCumSum {
     // b=10: 0+(1+10)=11, 11+(2+10)=23, 23+(3+10)=36
     let input = Value::make_record(&["base", "xs"], vec![
         Value::Int(10),
-        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+        Value::List(std::sync::Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
     ]);
-    let expected = Value::List(std::rc::Rc::new(vec![
+    let expected = Value::List(std::sync::Arc::new(vec![
         Value::Int(11), Value::Int(23), Value::Int(36),
     ]));
     assert_both_backends(src, "scaledCumSum", input, expected);
@@ -1090,7 +1089,7 @@ fn sumAndList {
     }
 }
 "#;
-    let xs = Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)]));
+    let xs = Value::List(std::sync::Arc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)]));
     assert_both_backends(src, "sumAndList", xs, Value::Int(30));
 }
 

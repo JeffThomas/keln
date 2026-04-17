@@ -22,9 +22,12 @@ pub struct VerifyExecutor {
 impl VerifyExecutor {
     /// Load a Keln source string and prepare the executor.
     pub fn from_source(source: &str) -> Result<Self, String> {
-        let program = crate::parser::parse(source).map_err(|e| format!("{}", e))?;
+        let program = std::sync::Arc::new(
+            crate::parser::parse(source).map_err(|e| format!("{}", e))?
+        );
         let mut evaluator = Evaluator::new();
         evaluator.load_program(&program);
+        evaluator.program = Some(program.clone());
         let trusted_modules = program
             .declarations
             .iter()

@@ -1,6 +1,5 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use crate::ast;
 use super::{ChannelInner, RuntimeError, Thunk, Value, VariantPayload};
@@ -32,6 +31,11 @@ pub struct Evaluator {
     pub(crate) closure_table: Vec<(ast::Expr, Vec<(String, Value)>)>,
     /// Current expression nesting depth — guards against silent Rust stack overflow.
     pub(crate) expr_depth: usize,
+    /// Shared parsed program — used by Task.spawn to create fresh evaluators on worker threads.
+    pub(crate) program: Option<Arc<crate::ast::Program>>,
+    /// VM-path task runner — injected by vm/exec when running bytecode.
+    /// When set, Task.spawn uses this instead of the tree-walker program.
+    pub(crate) task_runner: Option<Arc<dyn Fn(String, Value) -> Result<Value, String> + Send + Sync>>,
 }
 
 impl Default for Evaluator {
@@ -42,7 +46,15 @@ impl Default for Evaluator {
 
 impl Evaluator {
     pub fn new() -> Self {
-        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0, closure_table: Vec::new(), expr_depth: 0 }
+        Evaluator { env: Env::new(), fns: HashMap::new(), mock_fns: HashMap::new(), variant_fields: HashMap::new(), call_depth: 0, closure_table: Vec::new(), expr_depth: 0, program: None, task_runner: None }
+    }
+
+    /// Create a fresh evaluator from a shared program (used by Task.spawn worker threads).
+    pub fn from_program(program: Arc<crate::ast::Program>) -> Self {
+        let mut ev = Self::new();
+        ev.load_program(&program);
+        ev.program = Some(program);
+        ev
     }
 
     // =========================================================================
@@ -458,7 +470,7 @@ impl Evaluator {
 
             ast::Expr::List(items, _) => {
                 let vals: Result<Vec<_>, _> = items.iter().map(|e| self.eval_expr(e)).collect();
-                Ok(Value::List(Rc::new(vals?)))
+                Ok(Value::List(Arc::new(vals?)))
             }
 
             ast::Expr::DoBlock { stmts, final_expr, .. } => {
@@ -475,7 +487,7 @@ impl Evaluator {
                 for arm in arms {
                     let chan_val = self.eval_expr(&arm.channel)?;
                     if let Value::Channel(ch) = chan_val
-                        && let Some(item) = ch.borrow_mut().queue.pop_front()
+                        && let Some(item) = ch.lock().unwrap().queue.pop_front()
                     {
                         self.env.push_scope();
                         if arm.binding != "_" {
@@ -497,7 +509,7 @@ impl Evaluator {
                 let val = self.eval_expr(value)?;
                 match chan_val {
                     Value::Channel(ch) => {
-                        let mut inner = ch.borrow_mut();
+                        let mut inner = ch.lock().unwrap();
                         if inner.closed {
                             return Err(RuntimeError::at("channel send on closed channel", span));
                         }
@@ -512,7 +524,7 @@ impl Evaluator {
                 let chan_val = self.eval_expr(channel)?;
                 match chan_val {
                     Value::Channel(ch) => {
-                        let mut inner = ch.borrow_mut();
+                        let mut inner = ch.lock().unwrap();
                         if inner.closeable {
                             // Closeable<Channel<T>>: return Maybe<T>
                             match inner.queue.pop_front() {
@@ -538,18 +550,18 @@ impl Evaluator {
             }
 
             ast::Expr::ChannelNew { .. } => {
-                Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new()))))
+                Ok(Value::Channel(Arc::new(Mutex::new(ChannelInner::new()))))
             }
 
             ast::Expr::ChannelNewCloseable { .. } => {
-                Ok(Value::Channel(Rc::new(RefCell::new(ChannelInner::new_closeable()))))
+                Ok(Value::Channel(Arc::new(Mutex::new(ChannelInner::new_closeable()))))
             }
 
             ast::Expr::ChannelClose { channel, span: _ } => {
                 let chan_val = self.eval_expr(channel)?;
                 match chan_val {
-                    Value::Channel(rc) => {
-                        let mut inner = rc.borrow_mut();
+                    Value::Channel(arc) => {
+                        let mut inner = arc.lock().unwrap();
                         if !inner.closeable {
                             return Err(RuntimeError::new("Channel.close: channel was not created with Channel.newCloseable"));
                         }
@@ -830,7 +842,7 @@ impl Evaluator {
                 let chan_val = self.eval_expr(channel)?;
                 let val = self.eval_expr(value)?;
                 if let Value::Channel(ch) = chan_val {
-                    ch.borrow_mut().queue.push_back(val);
+                    ch.lock().unwrap().queue.push_back(val);
                 }
                 Ok(())
             }
