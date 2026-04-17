@@ -343,6 +343,8 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "List.findMap",
     // Map.foldUntil (174)
     "Map.foldUntil",
+    // List.mapFold (175)
+    "List.mapFold",
 ];
 
 pub struct BuiltinTable {

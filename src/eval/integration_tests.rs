@@ -1081,6 +1081,83 @@ fn sumMapFull {
     }
 
     // =========================================================================
+    // List.mapFold — running accumulator + output list in O(N)
+    // =========================================================================
+
+    const MAP_FOLD_SRC: &str = r#"
+fn prefixSums {
+    Pure List<Int> -> List<Int>
+    in: xs
+    out: List.mapFold(xs, 0, step).result
+    helpers: {
+        step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+            let s = it.acc + it.item in
+            {acc: s, val: s}
+    }
+}
+
+fn enumerate {
+    Pure List<String> -> List<{i: Int, val: String}>
+    in: xs
+    out: List.mapFold(xs, 0, tag).result
+    helpers: {
+        tag :: Pure {acc: Int, item: String} -> {acc: Int, val: {i: Int, v: String}} =>
+            {acc: it.acc + 1, val: {i: it.acc, v: it.item}}
+    }
+}
+
+fn finalAcc {
+    Pure List<Int> -> Int
+    in: xs
+    out: List.mapFold(xs, 0, step).acc
+    helpers: {
+        step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+            let s = it.acc + it.item in
+            {acc: s, val: s}
+    }
+}
+"#;
+
+    #[test]
+    fn test_map_fold_prefix_sums() {
+        let xs = Value::List(std::rc::Rc::new(vec![
+            Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4),
+        ]));
+        let expected = Value::List(std::rc::Rc::new(vec![
+            Value::Int(1), Value::Int(3), Value::Int(6), Value::Int(10),
+        ]));
+        assert_eq!(eval_fn(MAP_FOLD_SRC, "prefixSums", xs), Ok(expected));
+    }
+
+    #[test]
+    fn test_map_fold_empty() {
+        let xs = Value::List(std::rc::Rc::new(vec![]));
+        let expected = Value::List(std::rc::Rc::new(vec![]));
+        assert_eq!(eval_fn(MAP_FOLD_SRC, "prefixSums", xs), Ok(expected));
+    }
+
+    #[test]
+    fn test_map_fold_final_acc() {
+        let xs = Value::List(std::rc::Rc::new(vec![Value::Int(10), Value::Int(20), Value::Int(30)]));
+        assert_eq!(eval_fn(MAP_FOLD_SRC, "finalAcc", xs), Ok(Value::Int(60)));
+    }
+
+    #[test]
+    fn test_map_fold_enumerate() {
+        let xs = Value::List(std::rc::Rc::new(vec![
+            Value::Str("a".into()), Value::Str("b".into()),
+        ]));
+        let result = eval_fn(MAP_FOLD_SRC, "enumerate", xs).unwrap();
+        if let Value::List(items) = result {
+            assert_eq!(items.len(), 2);
+            if let Value::Record(_, ref f0) = items[0] { assert_eq!(f0[0], Value::Int(0)); }
+            if let Value::Record(_, ref f1) = items[1] { assert_eq!(f1[0], Value::Int(1)); }
+        } else {
+            panic!("expected List");
+        }
+    }
+
+    // =========================================================================
     // Regression 3: Lexer InputString truncation at 1024 characters.
     // Before the fix, lexxor::InputString silently truncated source to 1024
     // chars. Programs longer than that would fail to parse or lose definitions.

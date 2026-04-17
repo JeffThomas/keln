@@ -383,6 +383,7 @@ List.sort         { Pure List<T> where T: Ord            -> List<T>             
 List.combinations2 { Pure List<T>                        -> List<{fst:T,i:Int,j:Int,snd:T}> }
 List.foldUntil    { List<T>, U, FunctionRef<E,{acc:U,item:T},U>, FunctionRef<E,U,Bool> -> U | E }
 List.findMap      { List<T>, FunctionRef<E,T,Maybe<U>>           -> Maybe<U>         | E }
+List.mapFold      { List<T>, A, FunctionRef<E,{acc:A,item:T},{acc:A,val:U}> -> {acc:A,result:List<U>} | E }
 ```
 
 **`List.getOr(list, i, default)`** — safe indexed access; returns `list[i]` or `default` if out of bounds. Replaces `Maybe.getOr(List.head(List.drop(list, i)), default)`.
@@ -401,6 +402,23 @@ let result = List.findMap(List.range(2, 12), tryLength)
 ```
 
 **`List.foldUntil(list, init, stepFn, stopFn)`** — like `List.fold` but stops early when `stopFn(acc)` returns `true`. The step function receives `{acc: U, item: T}` (same as `List.fold`). Use this when you need to terminate a fold before processing the entire list (e.g. Kruskal's algorithm stopping at a single component).
+
+**`List.mapFold(list, init, stepFn)`** — combines map and fold in one O(N) pass. The step function receives `{acc: A, item: T}` and must return `{acc: A, val: U}`. Returns `{acc: A, result: List<U>}`. **This is the standard fix for the O(N²) list-accumulator trap** (see §15). Because the output list is built entirely inside a single Rust `Vec` allocation, the fold framework never sees intermediate `Rc<Vec>` references and no cloning occurs between steps. Use whenever you need both a running accumulator (e.g. a running sum, index, or state) AND a transformed list as output:
+```keln
+-- Running prefix-sum as a list:
+let sums = List.mapFold(values, 0, step).result
+helpers: {
+    step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+        let s = it.acc + it.item in {acc: s, val: s}
+}
+
+-- Enumerate (zip with index):
+let indexed = List.mapFold(items, 0, enumerate).result
+helpers: {
+    enumerate :: Pure {acc: Int, item: T} -> {acc: Int, val: {i: Int, v: T}} =>
+        {acc: it.acc + 1, val: {i: it.acc, v: it.item}}
+}
+```
 
 ### Map
 ```keln
@@ -871,8 +889,40 @@ let dists    = List.map(rawPairs, computeDist) in
 
 **Rule:** Never put a list into a fold accumulator if that list grows on every step
 and the total number of elements produced is large (> ~1000). Use a native
-combinator (`List.map`, `List.filter`, `List.combinations2`) that builds the
-result in Rust, then process it in a second pass.
+combinator that builds the result in Rust:
+
+| Pattern | Fix |
+|---|---|
+| Stateless transform | `List.map` |
+| Stateless filter | `List.filter` |
+| All pairs | `List.combinations2` |
+| Running accumulator + output list | **`List.mapFold`** ← new; use this |
+
+```keln
+-- WRONG — grows nd list in acc across L steps; O(L²):
+List.fold(List.range(0, l), {nd: [], runSum: 0}, phaseStep)
+
+-- RIGHT — builds result Vec in one Rust pass; O(L):
+List.mapFold(digits, 0, sumStep).result
+helpers: {
+    sumStep :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+        let s = (it.acc + it.item) % 10 in {acc: s, val: s}
+}
+```
+
+For the build-list-then-read pattern (no running state), inline capturing
+closures + `List.map` also work and avoid constructing a range:
+```keln
+-- WRONG — buildWStep appends to w in acc; O(L²):
+List.fold(List.range(0, l), {w: [], digits: digits, ...}, buildWStep).w
+
+-- RIGHT — List.map builds the Vec natively; O(L):
+let w =
+    let item :: Pure Int -> Int =>
+        List.getOr(digits, (offset + it) % origN, 0)
+    in
+    List.map(List.range(0, l), item)
+```
 
 ### Adding new stdlib builtins
 

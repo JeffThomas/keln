@@ -55,6 +55,7 @@ pub fn is_stdlib(name: &str) -> bool {
             | "List.combinations2"
             | "List.foldUntil"
             | "List.findMap"
+            | "List.mapFold"
             | "Int.parse"
             | "Int.toString"
             | "Int.abs"
@@ -532,6 +533,37 @@ pub fn dispatch(
                     Ok(none())
                 }
                 _ => Err(RuntimeError::new("List.findMap: expected List")),
+            }
+        }
+        "List.mapFold" => {
+            // List.mapFold(list, init, stepFn)
+            // stepFn receives {acc: A, item: T}; must return {acc: A, out: U}.
+            // Returns {acc: A, result: List<U>}.
+            // Builds the result list in a single Rust Vec — O(N) even when called from
+            // a fold, because no intermediate Rc<Vec> is exposed to the VM between steps.
+            let (list, init, f) = three(args, "List.mapFold")?;
+            match list {
+                Value::List(items) => {
+                    let mut acc = init;
+                    let mut out: Vec<Value> = Vec::with_capacity(items.len());
+                    for item in Rc::unwrap_or_clone(items) {
+                        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+                        let result = ev.call_value(f.clone(), arg, &sp())?;
+                        match result {
+                            Value::Record(layout, ref fields) => {
+                                let acc_pos = crate::eval::field_pos(layout, "acc")
+                                    .ok_or_else(|| RuntimeError::new("List.mapFold: step fn must return {acc, val}"))?;
+                                let val_pos = crate::eval::field_pos(layout, "val")
+                                    .ok_or_else(|| RuntimeError::new("List.mapFold: step fn must return {acc, val}"))?;
+                                out.push(fields[val_pos].clone());
+                                acc = fields[acc_pos].clone();
+                            }
+                            _ => return Err(RuntimeError::new("List.mapFold: step fn must return {acc, out}")),
+                        }
+                    }
+                    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
+                }
+                _ => Err(RuntimeError::new("List.mapFold: expected List")),
             }
         }
         "List.contains" => {

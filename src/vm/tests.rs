@@ -1024,6 +1024,77 @@ fn sumAll {
 }
 
 // =============================================================================
+// List.mapFold — both backends
+// =============================================================================
+
+#[test]
+fn test_list_map_fold_prefix_sums() {
+    let src = r#"
+fn prefixSums {
+    Pure List<Int> -> List<Int>
+    in: xs
+    out: List.mapFold(xs, 0, step).result
+    helpers: {
+        step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+            let s = it.acc + it.item in
+            {acc: s, val: s}
+    }
+}
+"#;
+    let xs = Value::List(std::rc::Rc::new(vec![
+        Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4),
+    ]));
+    let expected = Value::List(std::rc::Rc::new(vec![
+        Value::Int(1), Value::Int(3), Value::Int(6), Value::Int(10),
+    ]));
+    assert_both_backends(src, "prefixSums", xs, expected);
+}
+
+#[test]
+fn test_list_map_fold_closure_captures() {
+    // VmClosure path: step captures 'base' from outer let binding
+    let src = r#"
+fn scaledCumSum {
+    Pure { xs: List<Int>, base: Int } -> List<Int>
+    in: args
+    out:
+        let b = args.base in
+        let step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+            let s = it.acc + it.item + b in
+            {acc: s, val: s}
+        in
+        List.mapFold(args.xs, 0, step).result
+}
+"#;
+    // b=10: 0+(1+10)=11, 11+(2+10)=23, 23+(3+10)=36
+    let input = Value::make_record(&["base", "xs"], vec![
+        Value::Int(10),
+        Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+    ]);
+    let expected = Value::List(std::rc::Rc::new(vec![
+        Value::Int(11), Value::Int(23), Value::Int(36),
+    ]));
+    assert_both_backends(src, "scaledCumSum", input, expected);
+}
+
+#[test]
+fn test_list_map_fold_returns_final_acc() {
+    let src = r#"
+fn sumAndList {
+    Pure List<Int> -> Int
+    in: xs
+    out: List.mapFold(xs, 0, step).acc
+    helpers: {
+        step :: Pure {acc: Int, item: Int} -> {acc: Int, val: Int} =>
+            let s = it.acc + it.item in {acc: s, val: s}
+    }
+}
+"#;
+    let xs = Value::List(std::rc::Rc::new(vec![Value::Int(5), Value::Int(10), Value::Int(15)]));
+    assert_both_backends(src, "sumAndList", xs, Value::Int(30));
+}
+
+// =============================================================================
 // Fix 3 — Generic T.ref parsing
 // =============================================================================
 

@@ -732,6 +732,16 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             dispatch_builtin(name, args)
         }
+        "List.mapFold" => {
+            if let [list, init, Value::FnRef(fn_name)] = &args[..]
+                && module.fn_idx(fn_name.as_str()).is_some() {
+                return exec_list_map_fold_user(module, list.clone(), init.clone(), fn_name);
+            }
+            if let [list, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
+                return exec_list_map_fold_closure(module, list.clone(), init.clone(), *fn_idx, captures.clone());
+            }
+            dispatch_builtin(name, args)
+        }
         _ => dispatch_builtin(name, args),
     }
 }
@@ -1081,6 +1091,68 @@ fn exec_find_map_closure(
         }
     }
     Ok(Value::Variant { name: "None".to_string(), payload: crate::eval::VariantPayload::Unit })
+}
+
+/// Extracts (new_acc, val) from the {acc, val} record returned by a mapFold step fn.
+fn extract_map_fold_step(result: Value) -> Result<(Value, Value), ExecError> {
+    match result {
+        Value::Record(layout, ref fields) => {
+            let acc_pos = crate::eval::field_pos(layout, "acc")
+                .ok_or_else(|| ExecError::new("List.mapFold: step fn must return {acc, val}"))?;
+            let val_pos = crate::eval::field_pos(layout, "val")
+                .ok_or_else(|| ExecError::new("List.mapFold: step fn must return {acc, val}"))?;
+            Ok((fields[acc_pos].clone(), fields[val_pos].clone()))
+        }
+        _ => Err(ExecError::new("List.mapFold: step fn must return {acc, val}")),
+    }
+}
+
+fn exec_list_map_fold_user(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    fn_name: &str,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Rc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.mapFold: expected List")),
+    };
+    let fn_idx = module.fn_idx(fn_name)
+        .ok_or_else(|| ExecError::new(format!("List.mapFold: unknown fn '{}'", fn_name)))?;
+    let mut acc = init;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        let result = execute(module, fn_idx, arg)?;
+        let (new_acc, out_val) = extract_map_fold_step(result)?;
+        acc = new_acc;
+        out.push(out_val);
+    }
+    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
+}
+
+fn exec_list_map_fold_closure(
+    module: &KelnModule,
+    list: Value,
+    init: Value,
+    fn_idx: usize,
+    captures: Vec<(String, Value)>,
+) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Rc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.mapFold: expected List")),
+    };
+    let mut acc = init;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        let merged = build_closure_call_arg(arg, &captures);
+        let result = execute(module, fn_idx, merged)?;
+        let (new_acc, out_val) = extract_map_fold_step(result)?;
+        acc = new_acc;
+        out.push(out_val);
+    }
+    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Rc::new(out))]))
 }
 
 #[allow(clippy::mutable_key_type)]
