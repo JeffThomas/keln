@@ -347,6 +347,13 @@ pub static BUILTIN_NAMES: &[&str] = &[
     "List.mapFold",
     // Debug.print (176)
     "Debug.print",
+    // Int bitwise (177–182)
+    "Int.bitAnd", "Int.bitOr", "Int.bitXor", "Int.bitNot", "Int.shiftLeft", "Int.shiftRight",
+    // Queue (183–190)
+    "Queue.empty", "Queue.enqueue", "Queue.dequeue", "Queue.peek",
+    "Queue.isEmpty", "Queue.size", "Queue.fromList", "Queue.toList",
+    // Heap (191–196)
+    "Heap.empty", "Heap.push", "Heap.popMin", "Heap.peek", "Heap.isEmpty", "Heap.size",
 ];
 
 pub struct BuiltinTable {

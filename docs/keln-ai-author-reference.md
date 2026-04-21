@@ -469,6 +469,61 @@ Cloning a `Map`, `Set`, or `List` value is O(1) — it bumps a reference count, 
 
 **However:** if a large `Map`, `Set`, or `List` is **read-only** during a fold, keep it *out* of the accumulator entirely — capture it via a named capturing helper instead. See §10a.
 
+### Queue
+`Queue<T>` is a FIFO queue backed by `VecDeque` — O(1) amortised enqueue and dequeue. Copy-on-write (Arc-backed) like `List`.
+```keln
+Queue.empty     { Pure Unit              -> Queue<T>                          }
+Queue.enqueue   { Pure Queue<T>, T       -> Queue<T>                          }
+Queue.dequeue   { Pure Queue<T>          -> { queue: Queue<T>, item: Maybe<T> } }
+Queue.peek      { Pure Queue<T>          -> Maybe<T>                          }
+Queue.isEmpty   { Pure Queue<T>          -> Bool                              }
+Queue.size      { Pure Queue<T>          -> Int                               }
+Queue.fromList  { Pure List<T>           -> Queue<T>                          }
+Queue.toList    { Pure Queue<T>          -> List<T>                           }
+```
+
+BFS template (level-by-level using `Queue`):
+```keln
+let bfsStep :: Pure {acc: {q: Queue<State>, visited: Set<State>, dist: Map<State,Int>}, item: Int} -> {q: Queue<State>, visited: Set<State>, dist: Map<State,Int>} =>
+    let r   = Queue.dequeue(it.acc.q) in
+    match r.item {
+        None(Unit) -> it.acc
+        Some(cur)  ->
+            -- expand cur, enqueue unvisited neighbours
+            ...
+    }
+in
+```
+
+### Heap
+`Heap<T>` is a **min-priority queue** keyed by explicit `Int` priority. `Heap.push` takes the heap, a priority, and a value. `Heap.popMin` returns the lowest-priority entry. Copy-on-write (Arc-backed).
+```keln
+Heap.empty   { Pure Unit                -> Heap<T>                           }
+Heap.push    { Pure Heap<T>, Int, T     -> Heap<T>                           }  -- (heap, priority, value)
+Heap.popMin  { Pure Heap<T>            -> { heap: Heap<T>, item: Maybe<T> }  }
+Heap.peek    { Pure Heap<T>            -> Maybe<T>                           }
+Heap.isEmpty { Pure Heap<T>            -> Bool                               }
+Heap.size    { Pure Heap<T>            -> Int                                }
+```
+
+Dijkstra template:
+```keln
+let dijkStep :: Pure {acc: {h: Heap<State>, dist: Map<State,Int>}, item: Int} -> {h: Heap<State>, dist: Map<State,Int>} =>
+    let r = Heap.popMin(it.acc.h) in
+    match r.item {
+        None(Unit)   -> it.acc
+        Some(state)  ->
+            match Map.contains(it.acc.dist, state) {
+                true  -> it.acc.with({ h: r.heap })
+                false ->
+                    let d2 = Map.insert(it.acc.dist, state, state.cost) in
+                    -- push neighbours: Heap.push(r.heap, neighbour.cost, neighbour)
+                    it.acc.with({ h: r.heap, dist: d2 })
+            }
+    }
+in
+```
+
 ### String
 ```keln
 String.trim        { Pure String                    -> String         }
@@ -508,6 +563,19 @@ Int.min         { Pure Int, Int              -> Int            }
 Int.max         { Pure Int, Int              -> Int            }
 Int.clamp       { Pure Int, Int, Int         -> Int            }
 Int.pow         { Pure Int, Int where >= 0   -> Int            }
+Int.bitAnd      { Pure Int, Int              -> Int            }
+Int.bitOr       { Pure Int, Int              -> Int            }
+Int.bitXor      { Pure Int, Int              -> Int            }
+Int.bitNot      { Pure Int                   -> Int            }
+Int.shiftLeft   { Pure Int, Int              -> Int            }  -- k must be in [0,63]
+Int.shiftRight  { Pure Int, Int              -> Int            }  -- arithmetic; k in [0,63]
+```
+
+**Bitwise ops** are i64 operations. Use `Int.shiftLeft(1, k)` to build a bitmask bit `k`. Example:
+```keln
+let mask = Int.shiftLeft(1, 5) in         -- bit 5 set
+let v    = Int.bitOr(flags, mask) in       -- set bit 5
+let has5 = Int.bitAnd(flags, mask) > 0 in -- test bit 5
 ```
 
 ### Float

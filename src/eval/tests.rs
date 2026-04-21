@@ -1756,4 +1756,337 @@ fn run { IO Unit -> Int
         );
         assert_eq!(result, Ok(Value::Int(5050)));
     }
+
+    // =========================================================================
+    // Int bitwise
+    // =========================================================================
+
+    #[test]
+    fn test_int_bit_and() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.bitAnd(12, 10)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(8)));
+    }
+
+    #[test]
+    fn test_int_bit_or() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.bitOr(12, 10)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(14)));
+    }
+
+    #[test]
+    fn test_int_bit_xor() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.bitXor(12, 10)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
+    #[test]
+    fn test_int_bit_not() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.bitAnd(Int.bitNot(10), 15)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn test_int_shift_left() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.shiftLeft(1, 3)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(8)));
+    }
+
+    #[test]
+    fn test_int_shift_right() {
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Int
+    in: _
+    out: Int.shiftRight(64, 2)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(16)));
+    }
+
+    #[test]
+    fn test_int_bitmask_set_and_test() {
+        // set bit 5 in flags=0, then test it
+        let result = eval_fn(
+            r#"fn run { Pure Int -> Bool
+    in: _
+    out: do {
+        let mask  = Int.shiftLeft(1, 5)
+        let flags = Int.bitOr(0, mask)
+        Int.bitAnd(flags, mask) > 0
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // =========================================================================
+    // Queue
+    // =========================================================================
+
+    #[test]
+    fn test_queue_enqueue_dequeue() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Int
+    in: _
+    out: do {
+        let q  = Queue.empty
+        let q2 = Queue.enqueue(q, 10)
+        let q3 = Queue.enqueue(q2, 20)
+        let r  = Queue.dequeue(q3)
+        Maybe.getOr(r.item, -1)
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn test_queue_fifo_order() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> List<Int>
+    in: _
+    out: do {
+        let q  = Queue.fromList([1, 2, 3])
+        let r1 = Queue.dequeue(q)
+        let r2 = Queue.dequeue(r1.queue)
+        let r3 = Queue.dequeue(r2.queue)
+        [Maybe.getOr(r1.item, -1), Maybe.getOr(r2.item, -1), Maybe.getOr(r3.item, -1)]
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3),
+            ])))
+        );
+    }
+
+    #[test]
+    fn test_queue_dequeue_empty_returns_none() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Bool
+    in: _
+    out: do {
+        let r = Queue.dequeue(Queue.empty)
+        Maybe.isNone(r.item)
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_queue_is_empty() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Bool
+    in: _
+    out: Queue.isEmpty(Queue.empty)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_queue_size() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Int
+    in: _
+    out: Queue.size(Queue.fromList([10, 20, 30]))
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn test_queue_to_list_roundtrip() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> List<Int>
+    in: _
+    out: Queue.toList(Queue.fromList([5, 6, 7]))
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![
+                Value::Int(5),
+                Value::Int(6),
+                Value::Int(7),
+            ])))
+        );
+    }
+
+    // =========================================================================
+    // Heap
+    // =========================================================================
+
+    #[test]
+    fn test_heap_pop_min_order() {
+        // Push in reverse priority order; expect pop to return lowest priority first.
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> List<Int>
+    in: _
+    out: do {
+        let h  = Heap.empty
+        let h2 = Heap.push(h, 30, 300)
+        let h3 = Heap.push(h2, 10, 100)
+        let h4 = Heap.push(h3, 20, 200)
+        let r1 = Heap.popMin(h4)
+        let r2 = Heap.popMin(r1.heap)
+        let r3 = Heap.popMin(r2.heap)
+        [Maybe.getOr(r1.item, -1), Maybe.getOr(r2.item, -1), Maybe.getOr(r3.item, -1)]
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![
+                Value::Int(100),
+                Value::Int(200),
+                Value::Int(300),
+            ])))
+        );
+    }
+
+    #[test]
+    fn test_heap_pop_empty_returns_none() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Bool
+    in: _
+    out: do {
+        let r = Heap.popMin(Heap.empty)
+        Maybe.isNone(r.item)
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_heap_is_empty() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Bool
+    in: _
+    out: Heap.isEmpty(Heap.empty)
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_heap_size() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Int
+    in: _
+    out: do {
+        let h = Heap.push(Heap.push(Heap.empty, 1, 10), 2, 20)
+        Heap.size(h)
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn test_heap_peek_does_not_remove() {
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> Int
+    in: _
+    out: do {
+        let h = Heap.push(Heap.empty, 5, 99)
+        let _ = Heap.peek(h)
+        Heap.size(h)
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn test_heap_stable_tiebreak() {
+        // Two entries with the same priority; insertion order must be preserved.
+        let result = eval_fn(
+            r#"fn run { Pure Unit -> List<Int>
+    in: _
+    out: do {
+        let h  = Heap.push(Heap.empty, 5, 1)
+        let h2 = Heap.push(h, 5, 2)
+        let r1 = Heap.popMin(h2)
+        let r2 = Heap.popMin(r1.heap)
+        [Maybe.getOr(r1.item, -1), Maybe.getOr(r2.item, -1)]
+    }
+}"#,
+            "run",
+            Value::Unit,
+        );
+        assert_eq!(
+            result,
+            Ok(Value::List(std::sync::Arc::new(vec![
+                Value::Int(1),
+                Value::Int(2),
+            ])))
+        );
+    }
 }

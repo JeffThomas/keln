@@ -8,7 +8,7 @@ mod tests;
 #[cfg(test)]
 mod integration_tests;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -80,6 +80,10 @@ pub enum Value {
     /// VM closure produced by closure-lifting in the bytecode backend.
     /// Stores the lifted function index and a snapshot of captured variable values.
     VmClosure { fn_idx: usize, captures: Vec<(String, Value)> },
+    /// Min-priority queue — push with explicit Int priority, popMin returns smallest.
+    Heap(Arc<MinHeap>),
+    /// FIFO queue — O(1) amortised enqueue/dequeue via VecDeque.
+    Queue(Arc<VecDeque<Value>>),
 }
 
 // Compile-time check: Value must be Send + Sync for cross-thread task spawning.
@@ -124,6 +128,55 @@ impl Value {
     }
 }
 
+// =============================================================================
+// MinHeap — min-priority queue backing Value::Heap
+// =============================================================================
+
+/// A single entry in a `MinHeap`. Ordered by `(priority asc, seq asc)` so that
+/// `BinaryHeap` (which is a max-heap) gives us min-priority pop.
+#[derive(Debug, Clone)]
+pub struct HeapEntry {
+    pub priority: i64,
+    pub seq:      u64,
+    pub value:    Value,
+}
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority && self.seq == other.seq
+    }
+}
+impl Eq for HeapEntry {}
+
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Invert priority so BinaryHeap (max-heap) pops smallest first.
+        other.priority.cmp(&self.priority)
+            .then(other.seq.cmp(&self.seq))
+    }
+}
+
+/// Arc-wrappable min-heap keyed by explicit integer priority.
+#[derive(Debug, Clone)]
+pub struct MinHeap {
+    pub entries: BinaryHeap<HeapEntry>,
+    pub counter: u64,
+}
+
+impl MinHeap {
+    pub fn new() -> Self { MinHeap { entries: BinaryHeap::new(), counter: 0 } }
+}
+
+impl Default for MinHeap {
+    fn default() -> Self { Self::new() }
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -138,6 +191,8 @@ impl PartialEq for Value {
             (Value::Map(a), Value::Map(b)) => **a == **b,
             (Value::Set(a), Value::Set(b)) => **a == **b,
             (Value::List(a), Value::List(b)) => **a == **b,
+            (Value::Queue(a), Value::Queue(b)) => **a == **b,
+            (Value::Heap(a), Value::Heap(b)) => Arc::ptr_eq(a, b),
             (Value::Record(la, a), Value::Record(lb, b)) => {
                 if la == lb {
                     a == b
@@ -213,6 +268,8 @@ impl Ord for Value {
                 Value::TypeRef(_) => 17,
                 Value::Closure { .. } => 18,
                 Value::VmClosure { .. } => 19,
+                Value::Heap(_) => 20,
+                Value::Queue(_) => 21,
             }
         }
         let d = disc(self).cmp(&disc(other));
@@ -253,6 +310,8 @@ impl Ord for Value {
             (Value::TypeRef(a), Value::TypeRef(b)) => a.cmp(b),
             (Value::Closure { id: a }, Value::Closure { id: b }) => a.cmp(b),
             (Value::VmClosure { fn_idx: a, .. }, Value::VmClosure { fn_idx: b, .. }) => a.cmp(b),
+            (Value::Heap(a), Value::Heap(b)) => Arc::as_ptr(a).cast::<()>().cmp(&Arc::as_ptr(b).cast::<()>()),
+            (Value::Queue(a), Value::Queue(b)) => (**a).iter().cmp((**b).iter()),
             _ => unreachable!("discriminants matched but variant arms did not"),
         }
     }
@@ -362,6 +421,15 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::TypeRef(name) => write!(f, "TypeRef<{}>", name),
+            Value::Queue(q) => {
+                write!(f, "Queue[")?;
+                for (i, v) in q.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Value::Heap(h) => write!(f, "<heap:{}>", h.entries.len()),
         }
     }
 }

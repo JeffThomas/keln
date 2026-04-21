@@ -1,5 +1,5 @@
 use std::sync::{Arc, OnceLock, Mutex};
-use super::{RuntimeError, TaskHandle, Value, VariantPayload};
+use super::{HeapEntry, MinHeap, RuntimeError, TaskHandle, Value, VariantPayload};
 use super::eval::Evaluator;
 
 /// Return true if `name` is a built-in stdlib function.
@@ -179,6 +179,26 @@ pub fn is_stdlib(name: &str) -> bool {
             | "File.read"
             | "File.readLines"
             | "Debug.print"
+            | "Int.bitAnd"
+            | "Int.bitOr"
+            | "Int.bitXor"
+            | "Int.bitNot"
+            | "Int.shiftLeft"
+            | "Int.shiftRight"
+            | "Queue.empty"
+            | "Queue.enqueue"
+            | "Queue.dequeue"
+            | "Queue.peek"
+            | "Queue.isEmpty"
+            | "Queue.size"
+            | "Queue.fromList"
+            | "Queue.toList"
+            | "Heap.empty"
+            | "Heap.push"
+            | "Heap.popMin"
+            | "Heap.peek"
+            | "Heap.isEmpty"
+            | "Heap.size"
     )
 }
 
@@ -1796,6 +1816,187 @@ pub fn dispatch(
                     Err(e) => Err(RuntimeError::new(format!("File.readLines: {}", e))),
                 },
                 _ => Err(RuntimeError::new("File.readLines: expected String path")),
+            }
+        }
+
+        // =====================================================================
+        // Int bitwise
+        // =====================================================================
+        "Int.bitAnd" => {
+            let (a, b) = two(args, "Int.bitAnd")?;
+            match (a, b) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x & y)),
+                _ => Err(RuntimeError::new("Int.bitAnd: expected two Int")),
+            }
+        }
+        "Int.bitOr" => {
+            let (a, b) = two(args, "Int.bitOr")?;
+            match (a, b) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x | y)),
+                _ => Err(RuntimeError::new("Int.bitOr: expected two Int")),
+            }
+        }
+        "Int.bitXor" => {
+            let (a, b) = two(args, "Int.bitXor")?;
+            match (a, b) {
+                (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x ^ y)),
+                _ => Err(RuntimeError::new("Int.bitXor: expected two Int")),
+            }
+        }
+        "Int.bitNot" => {
+            let v = one(args, "Int.bitNot")?;
+            match v {
+                Value::Int(x) => Ok(Value::Int(!x)),
+                _ => Err(RuntimeError::new("Int.bitNot: expected Int")),
+            }
+        }
+        "Int.shiftLeft" => {
+            let (a, b) = two(args, "Int.shiftLeft")?;
+            match (a, b) {
+                (Value::Int(x), Value::Int(k)) if (0..64).contains(&k) => Ok(Value::Int(x << k)),
+                (Value::Int(_), Value::Int(k)) => Err(RuntimeError::new(format!("Int.shiftLeft: shift amount {} out of range [0,63]", k))),
+                _ => Err(RuntimeError::new("Int.shiftLeft: expected two Int")),
+            }
+        }
+        "Int.shiftRight" => {
+            let (a, b) = two(args, "Int.shiftRight")?;
+            match (a, b) {
+                (Value::Int(x), Value::Int(k)) if (0..64).contains(&k) => Ok(Value::Int(x >> k)),
+                (Value::Int(_), Value::Int(k)) => Err(RuntimeError::new(format!("Int.shiftRight: shift amount {} out of range [0,63]", k))),
+                _ => Err(RuntimeError::new("Int.shiftRight: expected two Int")),
+            }
+        }
+
+        // =====================================================================
+        // Queue
+        // =====================================================================
+        "Queue.empty" => {
+            Ok(Value::Queue(Arc::new(std::collections::VecDeque::new())))
+        }
+        "Queue.enqueue" => {
+            let (q, item) = two(args, "Queue.enqueue")?;
+            match q {
+                Value::Queue(arc) => {
+                    let mut new_q = (*arc).clone();
+                    new_q.push_back(item);
+                    Ok(Value::Queue(Arc::new(new_q)))
+                }
+                _ => Err(RuntimeError::new("Queue.enqueue: expected Queue")),
+            }
+        }
+        "Queue.dequeue" => {
+            let v = one(args, "Queue.dequeue")?;
+            match v {
+                Value::Queue(arc) => {
+                    let mut new_q = (*arc).clone();
+                    let item_val = match new_q.pop_front() {
+                        Some(v) => some(v),
+                        None    => none(),
+                    };
+                    Ok(Value::make_record(
+                        &["queue", "item"],
+                        vec![Value::Queue(Arc::new(new_q)), item_val],
+                    ))
+                }
+                _ => Err(RuntimeError::new("Queue.dequeue: expected Queue")),
+            }
+        }
+        "Queue.peek" => {
+            let v = one(args, "Queue.peek")?;
+            match v {
+                Value::Queue(arc) => Ok(match arc.front() {
+                    Some(v) => some(v.clone()),
+                    None    => none(),
+                }),
+                _ => Err(RuntimeError::new("Queue.peek: expected Queue")),
+            }
+        }
+        "Queue.isEmpty" => {
+            let v = one(args, "Queue.isEmpty")?;
+            match v {
+                Value::Queue(arc) => Ok(Value::Bool(arc.is_empty())),
+                _ => Err(RuntimeError::new("Queue.isEmpty: expected Queue")),
+            }
+        }
+        "Queue.size" => {
+            let v = one(args, "Queue.size")?;
+            match v {
+                Value::Queue(arc) => Ok(Value::Int(arc.len() as i64)),
+                _ => Err(RuntimeError::new("Queue.size: expected Queue")),
+            }
+        }
+        "Queue.fromList" => {
+            let v = one(args, "Queue.fromList")?;
+            match v {
+                Value::List(arc) => Ok(Value::Queue(Arc::new(arc.iter().cloned().collect()))),
+                _ => Err(RuntimeError::new("Queue.fromList: expected List")),
+            }
+        }
+        "Queue.toList" => {
+            let v = one(args, "Queue.toList")?;
+            match v {
+                Value::Queue(arc) => Ok(Value::List(Arc::new(arc.iter().cloned().collect()))),
+                _ => Err(RuntimeError::new("Queue.toList: expected List")),
+            }
+        }
+
+        // =====================================================================
+        // Heap (min-priority queue keyed by Int priority)
+        // =====================================================================
+        "Heap.empty" => {
+            Ok(Value::Heap(Arc::new(MinHeap::new())))
+        }
+        "Heap.push" => {
+            let (heap_val, prio, item) = three(args, "Heap.push")?;
+            match (heap_val, prio) {
+                (Value::Heap(arc), Value::Int(p)) => {
+                    let mut h = (*arc).clone();
+                    h.entries.push(HeapEntry { priority: p, seq: h.counter, value: item });
+                    h.counter += 1;
+                    Ok(Value::Heap(Arc::new(h)))
+                }
+                _ => Err(RuntimeError::new("Heap.push: expected Heap, Int, value")),
+            }
+        }
+        "Heap.popMin" => {
+            let v = one(args, "Heap.popMin")?;
+            match v {
+                Value::Heap(arc) => {
+                    let mut h = (*arc).clone();
+                    let item_val = match h.entries.pop() {
+                        Some(e) => some(e.value),
+                        None    => none(),
+                    };
+                    Ok(Value::make_record(
+                        &["heap", "item"],
+                        vec![Value::Heap(Arc::new(h)), item_val],
+                    ))
+                }
+                _ => Err(RuntimeError::new("Heap.popMin: expected Heap")),
+            }
+        }
+        "Heap.peek" => {
+            let v = one(args, "Heap.peek")?;
+            match v {
+                Value::Heap(arc) => Ok(match arc.entries.peek() {
+                    Some(e) => some(e.value.clone()),
+                    None    => none(),
+                }),
+                _ => Err(RuntimeError::new("Heap.peek: expected Heap")),
+            }
+        }
+        "Heap.isEmpty" => {
+            let v = one(args, "Heap.isEmpty")?;
+            match v {
+                Value::Heap(arc) => Ok(Value::Bool(arc.entries.is_empty())),
+                _ => Err(RuntimeError::new("Heap.isEmpty: expected Heap")),
+            }
+        }
+        "Heap.size" => {
+            let v = one(args, "Heap.size")?;
+            match v {
+                Value::Heap(arc) => Ok(Value::Int(arc.entries.len() as i64)),
+                _ => Err(RuntimeError::new("Heap.size: expected Heap")),
             }
         }
 

@@ -65,6 +65,11 @@ pub fn keln_value_to_json(v: &Value) -> JValue {
         Value::PartialFn { name, .. } => json!({ "$partial": name }),
         Value::Closure { id } => json!({ "$closure": id }),
         Value::VmClosure { fn_idx, .. } => json!({ "$vm-closure": fn_idx }),
+        Value::Queue(q) => {
+            let arr: Vec<JValue> = q.iter().map(keln_value_to_json).collect();
+            json!({ "$queue": arr })
+        }
+        Value::Heap(h) => json!({ "$heap": h.entries.len() }),
     }
 }
 

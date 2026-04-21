@@ -35,6 +35,7 @@ pub struct Evaluator {
     pub(crate) program: Option<Arc<crate::ast::Program>>,
     /// VM-path task runner — injected by vm/exec when running bytecode.
     /// When set, Task.spawn uses this instead of the tree-walker program.
+    #[allow(clippy::type_complexity)]
     pub(crate) task_runner: Option<Arc<dyn Fn(String, Value) -> Result<Value, String> + Send + Sync>>,
 }
 
@@ -355,7 +356,7 @@ impl Evaluator {
                 let name = parts.join(".");
                 // Zero-arg constants: evaluate immediately so they work in value
                 // position (record fields, let bindings, etc.) without ambiguity.
-                if matches!(name.as_str(), "Map.empty" | "Set.empty" | "Bytes.empty") {
+                if matches!(name.as_str(), "Map.empty" | "Set.empty" | "Bytes.empty" | "Queue.empty" | "Heap.empty") {
                     return stdlib::dispatch(&name, vec![Value::Unit], self);
                 }
                 Ok(Value::FnRef(name))
