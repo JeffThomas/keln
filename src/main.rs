@@ -125,10 +125,7 @@ fn cmd_run(path: &str, func: &str, arg_json: Option<&str>) {
         None => Value::Unit,
         Some(s) => match serde_json::from_str::<serde_json::Value>(s) {
             Ok(j) => json_to_value(j),
-            Err(e) => {
-                eprintln!("error: invalid JSON argument: {}", e);
-                std::process::exit(1);
-            }
+            Err(_) => Value::Str(s.to_string()),
         },
     };
 
@@ -287,10 +284,7 @@ fn cmd_run_bc(path: &str, func_override: Option<&str>, arg_json: Option<&str>) {
         None => Value::Unit,
         Some(s) => match serde_json::from_str::<serde_json::Value>(s) {
             Ok(j) => json_to_value(j),
-            Err(e) => {
-                eprintln!("error: invalid JSON argument: {}", e);
-                std::process::exit(1);
-            }
+            Err(_) => Value::Str(s.to_string()),
         },
     };
 

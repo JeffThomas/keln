@@ -204,6 +204,15 @@ fn exec_step(
                     frame.write(0, merged);
                     *ip = 0;
                 }
+                Value::PartialFn { name: pfn_name, bound } => {
+                    let merged = merge_partial_arg(&bound, new_arg);
+                    let target = module.fn_idx(&pfn_name)
+                        .ok_or_else(|| ExecError::new(format!("TailCallDyn: unknown fn '{}'", pfn_name)))?;
+                    *current_fn = target;
+                    *frame = Frame::new(module.fns[*current_fn].register_count);
+                    frame.write(0, merged);
+                    *ip = 0;
+                }
                 _ => {
                     let name = fn_ref_name(&fn_val)?;
                     let target = module
@@ -227,6 +236,16 @@ fn exec_step(
                     let old_frame = std::mem::replace(frame, Frame::new(module.fns[fn_idx].register_count));
                     call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
                     *current_fn = fn_idx;
+                    frame.write(0, merged);
+                    *ip = 0;
+                }
+                Value::PartialFn { name: pfn_name, bound } => {
+                    let merged = merge_partial_arg(&bound, arg);
+                    let target = module.fn_idx(&pfn_name)
+                        .ok_or_else(|| ExecError::new(format!("CallDyn: unknown fn '{}'", pfn_name)))?;
+                    let old_frame = std::mem::replace(frame, Frame::new(module.fns[target].register_count));
+                    call_stack.push(CallFrame { fn_idx: *current_fn, ip: *ip + 1, frame: old_frame, dst });
+                    *current_fn = target;
                     frame.write(0, merged);
                     *ip = 0;
                 }
@@ -669,6 +688,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             if let [list, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_fold_closure(module, list.clone(), init.clone(), *fn_idx, captures.clone());
             }
+            if let [list, init, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_fold_with_fn(module, list.clone(), init.clone(), f.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.map" => {
@@ -679,6 +701,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_map_closure(module, list.clone(), *fn_idx, captures.clone());
             }
+            if let [list, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_map_with_fn(module, list.clone(), f.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.filter" => {
@@ -688,6 +713,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_filter_closure(module, list.clone(), *fn_idx, captures.clone());
+            }
+            if let [list, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_filter_with_fn(module, list.clone(), f.clone());
             }
             dispatch_builtin(name, args)
         }
@@ -708,6 +736,10 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
                 && module.fn_idx(stop_name.as_str()).is_some() {
                 return exec_fold_until_mixed_rev(module, list.clone(), init.clone(), *si, sc.clone(), stop_name);
             }
+            if let [list, init, step, stop] = &args[..]
+                && (matches!(step, Value::PartialFn { .. }) || matches!(stop, Value::PartialFn { .. })) {
+                return exec_fold_until_with_fn(module, list.clone(), init.clone(), step.clone(), stop.clone());
+            }
             dispatch_builtin(name, args)
         }
         "Map.fold" => {
@@ -717,6 +749,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             if let [map, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_map_fold_closure(module, map.clone(), init.clone(), *fn_idx, captures.clone());
+            }
+            if let [map, init, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_map_fold_with_fn(module, map.clone(), init.clone(), f.clone());
             }
             dispatch_builtin(name, args)
         }
@@ -747,6 +782,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             if let [list, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_find_map_closure(module, list.clone(), *fn_idx, captures.clone());
             }
+            if let [list, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_find_map_with_fn(module, list.clone(), f.clone());
+            }
             dispatch_builtin(name, args)
         }
         "List.mapFold" => {
@@ -756,6 +794,9 @@ fn exec_builtin_with_module(module: &KelnModule, name: &str, args: Vec<Value>) -
             }
             if let [list, init, Value::VmClosure { fn_idx, captures }] = &args[..] {
                 return exec_list_map_fold_closure(module, list.clone(), init.clone(), *fn_idx, captures.clone());
+            }
+            if let [list, init, f @ Value::PartialFn { .. }] = &args[..] {
+                return exec_list_map_fold_with_fn(module, list.clone(), init.clone(), f.clone());
             }
             dispatch_builtin(name, args)
         }
@@ -915,6 +956,47 @@ fn build_closure_call_arg(arg: Value, captures: &[(String, Value)]) -> Value {
         .collect();
     let layout = crate::eval::intern_layout(&names);
     Value::Record(layout, values)
+}
+
+/// Merge PartialFn bound fields with the incoming call argument.
+/// Mirrors the tree-walker's `call_value` behavior for Value::PartialFn.
+fn merge_partial_arg(bound: &[(String, Value)], arg: Value) -> Value {
+    let mut pairs: Vec<(String, Value)> = bound.to_vec();
+    match arg {
+        Value::Record(layout, values) => {
+            let names = crate::eval::fields_of_layout(layout);
+            pairs.extend(names.into_iter().zip(values));
+        }
+        other => {
+            pairs.push(("_input".to_string(), other));
+        }
+    }
+    Value::make_record_from_pairs(pairs)
+}
+
+/// Dispatch a call to any function value: FnRef, VmClosure, or PartialFn.
+/// Used by generic HOF helpers so all three kinds work as callbacks.
+fn call_fn_val(module: &KelnModule, f: Value, arg: Value) -> Result<Value, ExecError> {
+    match f {
+        Value::FnRef(name) => {
+            if let Some(idx) = module.fn_idx(&name) {
+                execute(module, idx, arg)
+            } else {
+                dispatch_builtin(&name, vec![arg])
+            }
+        }
+        Value::VmClosure { fn_idx, captures } => {
+            let merged = build_closure_call_arg(arg, &captures);
+            execute(module, fn_idx, merged)
+        }
+        Value::PartialFn { name, bound } => {
+            let merged = merge_partial_arg(&bound, arg);
+            let idx = module.fn_idx(&name)
+                .ok_or_else(|| ExecError::new(format!("undefined function '{}'", name)))?;
+            execute(module, idx, merged)
+        }
+        other => Err(ExecError::new(format!("not a callable: {}", other))),
+    }
 }
 
 fn exec_fold_closure(
@@ -1297,6 +1379,110 @@ fn exec_map_fold_closure(
         let step_arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
         let merged = build_closure_call_arg(step_arg, &captures);
         acc = execute(module, fn_idx, merged)?;
+    }
+    Ok(acc)
+}
+
+// =============================================================================
+// Generic HOF helpers — work with FnRef, VmClosure, or PartialFn via call_fn_val
+// =============================================================================
+
+fn exec_fold_with_fn(module: &KelnModule, list: Value, init: Value, f: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.fold: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        acc = call_fn_val(module, f.clone(), step_arg)?;
+    }
+    Ok(acc)
+}
+
+fn exec_map_with_fn(module: &KelnModule, list: Value, f: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.map: expected List")),
+    };
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        result.push(call_fn_val(module, f.clone(), item)?);
+    }
+    Ok(Value::List(Arc::new(result)))
+}
+
+fn exec_filter_with_fn(module: &KelnModule, list: Value, f: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.filter: expected List")),
+    };
+    let mut result = Vec::new();
+    for item in items {
+        if call_fn_val(module, f.clone(), item.clone())? == Value::Bool(true) {
+            result.push(item);
+        }
+    }
+    Ok(Value::List(Arc::new(result)))
+}
+
+fn exec_find_map_with_fn(module: &KelnModule, list: Value, f: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.findMap: expected List")),
+    };
+    for item in items {
+        let result = call_fn_val(module, f.clone(), item)?;
+        if matches!(&result, Value::Variant { name, .. } if name == "Some") {
+            return Ok(result);
+        }
+    }
+    Ok(Value::Variant { name: "None".to_string(), payload: crate::eval::VariantPayload::Unit })
+}
+
+fn exec_list_map_fold_with_fn(module: &KelnModule, list: Value, init: Value, f: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.mapFold: expected List")),
+    };
+    let mut acc = init;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        let result = call_fn_val(module, f.clone(), step_arg)?;
+        let (new_acc, out_val) = extract_map_fold_step(result)?;
+        acc = new_acc;
+        out.push(out_val);
+    }
+    Ok(Value::make_record(&["acc", "result"], vec![acc, Value::List(Arc::new(out))]))
+}
+
+#[allow(clippy::mutable_key_type)]
+fn exec_map_fold_with_fn(module: &KelnModule, map: Value, init: Value, f: Value) -> Result<Value, ExecError> {
+    let entries = match map {
+        Value::Map(m) => m,
+        _ => return Err(ExecError::new("Map.fold: expected Map")),
+    };
+    let mut acc = init;
+    for (k, v) in entries.iter() {
+        let step_arg = Value::make_record(&["acc", "key", "value"], vec![acc, k.clone(), v.clone()]);
+        acc = call_fn_val(module, f.clone(), step_arg)?;
+    }
+    Ok(acc)
+}
+
+fn exec_fold_until_with_fn(module: &KelnModule, list: Value, init: Value, step: Value, stop: Value) -> Result<Value, ExecError> {
+    let items = match list {
+        Value::List(v) => Arc::unwrap_or_clone(v),
+        _ => return Err(ExecError::new("List.foldUntil: expected List")),
+    };
+    let mut acc = init;
+    for item in items {
+        let step_arg = Value::make_record(&["acc", "item"], vec![acc, item]);
+        acc = call_fn_val(module, step.clone(), step_arg)?;
+        if call_fn_val(module, stop.clone(), acc.clone())? == Value::Bool(true) {
+            break;
+        }
     }
     Ok(acc)
 }

@@ -1428,7 +1428,7 @@ impl Lowerer {
     /// called immediately when they appear as a bare QualifiedName expression
     /// (e.g. `Map.empty` in `List.fold(xs, Map.empty, f)`).
     fn is_zero_arg_builtin(name: &str) -> bool {
-        matches!(name, "Map.empty" | "Set.empty" | "Bytes.empty")
+        matches!(name, "Map.empty" | "Set.empty" | "Bytes.empty" | "Queue.empty" | "Heap.empty")
     }
 
     // =========================================================================
